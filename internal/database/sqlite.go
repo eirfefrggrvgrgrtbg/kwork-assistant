@@ -114,6 +114,38 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY(evaluation_id) REFERENCES project_evaluations(id),
 			UNIQUE(evaluation_id, model, prompt_version)
 		);`,
+		`CREATE TABLE IF NOT EXISTS inbound_emails (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider_uid TEXT,
+			message_id TEXT NOT NULL,
+			sender TEXT,
+			subject TEXT,
+			text_body TEXT,
+			html_body TEXT,
+			received_at DATETIME,
+			raw_hash TEXT,
+			processing_status TEXT,
+			processing_error TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(message_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_inbound_emails_status ON inbound_emails(processing_status);`,
+		`CREATE TABLE IF NOT EXISTS telegram_notifications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id INTEGER NOT NULL,
+			evaluation_id INTEGER,
+			proposal_draft_id INTEGER,
+			notification_type TEXT NOT NULL,
+			chat_id INTEGER NOT NULL,
+			telegram_message_id INTEGER,
+			status TEXT NOT NULL,
+			error TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			sent_at DATETIME,
+			FOREIGN KEY(project_id) REFERENCES projects(id),
+			UNIQUE(project_id, notification_type)
+		);`,
 	}
 
 	for _, query := range queries {
@@ -584,3 +616,199 @@ func (db *DB) GetProposalDrafts(ctx context.Context, filter domain.EvaluationFil
 	}
 	return drafts, rows.Err()
 }
+
+func (db *DB) GetAppMeta(ctx context.Context, key string) (string, error) {
+	var value string
+	err := db.QueryRowContext(ctx, "SELECT value FROM app_meta WHERE key = ?", key).Scan(&value)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+func (db *DB) SetAppMeta(ctx context.Context, key, value string) error {
+	query := `
+		INSERT INTO app_meta (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+	`
+	_, err := db.ExecContext(ctx, query, key, value)
+	return err
+}
+
+func (db *DB) SaveInboundEmail(ctx context.Context, email *domain.InboundEmail) error {
+	query := `
+		INSERT INTO inbound_emails (
+			provider_uid, message_id, sender, subject, text_body, html_body,
+			received_at, raw_hash, processing_status, processing_error
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(message_id) DO NOTHING
+	`
+	res, err := db.ExecContext(ctx, query,
+		email.ProviderUID, email.MessageID, email.Sender, email.Subject, email.TextBody, email.HTMLBody,
+		email.ReceivedAt, email.RawHash, email.ProcessingStatus, email.ProcessingError,
+	)
+	if err != nil {
+		return err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	// If id is 0, it means conflict DO NOTHING happened, meaning the email was a duplicate.
+	// We'll leave email.ID as 0 in this case.
+	if id > 0 {
+		email.ID = id
+	}
+	return nil
+}
+
+func (db *DB) GetInboundEmailByID(ctx context.Context, id int64) (*domain.InboundEmail, error) {
+	query := `
+		SELECT id, provider_uid, message_id, sender, subject, text_body, html_body,
+		       received_at, raw_hash, processing_status, processing_error, created_at, updated_at
+		FROM inbound_emails WHERE id = ?
+	`
+	var e domain.InboundEmail
+	err := db.QueryRowContext(ctx, query, id).Scan(
+		&e.ID, &e.ProviderUID, &e.MessageID, &e.Sender, &e.Subject, &e.TextBody, &e.HTMLBody,
+		&e.ReceivedAt, &e.RawHash, &e.ProcessingStatus, &e.ProcessingError, &e.CreatedAt, &e.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &e, nil
+}
+
+func (db *DB) GetPendingInboundEmails(ctx context.Context, limit int) ([]domain.InboundEmail, error) {
+	query := `
+		SELECT id, provider_uid, message_id, sender, subject, text_body, html_body,
+		       received_at, raw_hash, processing_status, processing_error, created_at, updated_at
+		FROM inbound_emails WHERE processing_status IN (?, ?)
+		ORDER BY id ASC LIMIT ?
+	`
+	rows, err := db.QueryContext(ctx, query, domain.ProcessingStatusNew, domain.ProcessingStatusRetryableError, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var emails []domain.InboundEmail
+	for rows.Next() {
+		var e domain.InboundEmail
+		err := rows.Scan(
+			&e.ID, &e.ProviderUID, &e.MessageID, &e.Sender, &e.Subject, &e.TextBody, &e.HTMLBody,
+			&e.ReceivedAt, &e.RawHash, &e.ProcessingStatus, &e.ProcessingError, &e.CreatedAt, &e.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		emails = append(emails, e)
+	}
+	return emails, rows.Err()
+}
+
+func (db *DB) GetRecentInboundEmails(ctx context.Context, limit int) ([]domain.InboundEmail, error) {
+	query := `
+		SELECT id, provider_uid, message_id, sender, subject, text_body, html_body,
+		       received_at, raw_hash, processing_status, processing_error, created_at, updated_at
+		FROM inbound_emails
+		ORDER BY id DESC LIMIT ?
+	`
+	rows, err := db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var emails []domain.InboundEmail
+	for rows.Next() {
+		var e domain.InboundEmail
+		err := rows.Scan(
+			&e.ID, &e.ProviderUID, &e.MessageID, &e.Sender, &e.Subject, &e.TextBody, &e.HTMLBody,
+			&e.ReceivedAt, &e.RawHash, &e.ProcessingStatus, &e.ProcessingError, &e.CreatedAt, &e.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		emails = append(emails, e)
+	}
+	return emails, rows.Err()
+}
+
+func (db *DB) UpdateInboundEmailStatus(ctx context.Context, id int64, status domain.ProcessingStatus, processingError string) error {
+	query := `UPDATE inbound_emails SET processing_status = ?, processing_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+	_, err := db.ExecContext(ctx, query, status, processingError, id)
+	return err
+}
+
+func (db *DB) SaveTelegramNotification(ctx context.Context, n *domain.TelegramNotification) error {
+	var evaluationID sql.NullInt64
+	if n.EvaluationID > 0 {
+		evaluationID = sql.NullInt64{Int64: n.EvaluationID, Valid: true}
+	}
+	var proposalDraftID sql.NullInt64
+	if n.ProposalDraftID > 0 {
+		proposalDraftID = sql.NullInt64{Int64: n.ProposalDraftID, Valid: true}
+	}
+	var msgID sql.NullInt64
+	if n.TelegramMessageID > 0 {
+		msgID = sql.NullInt64{Int64: n.TelegramMessageID, Valid: true}
+	}
+
+	query := `
+		INSERT INTO telegram_notifications (
+			project_id, evaluation_id, proposal_draft_id, notification_type,
+			chat_id, telegram_message_id, status, error, sent_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(project_id, notification_type) DO UPDATE SET
+			evaluation_id = excluded.evaluation_id,
+			proposal_draft_id = excluded.proposal_draft_id,
+			chat_id = excluded.chat_id,
+			telegram_message_id = excluded.telegram_message_id,
+			status = excluded.status,
+			error = excluded.error,
+			sent_at = excluded.sent_at
+	`
+	
+	var sentAt interface{}
+	if !n.SentAt.IsZero() {
+		sentAt = n.SentAt
+	}
+
+	res, err := db.ExecContext(ctx, query,
+		n.ProjectID, evaluationID, proposalDraftID, n.NotificationType,
+		n.ChatID, msgID, n.Status, n.Error, sentAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if id > 0 {
+		n.ID = id
+	}
+	return nil
+}
+
+func (db *DB) HasTelegramNotification(ctx context.Context, projectID int64, notificationType domain.NotificationType) (bool, error) {
+	var id int64
+	err := db.QueryRowContext(ctx, "SELECT id FROM telegram_notifications WHERE project_id = ? AND notification_type = ?", projectID, notificationType).Scan(&id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+

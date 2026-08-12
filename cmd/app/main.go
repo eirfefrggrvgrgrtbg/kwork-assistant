@@ -128,6 +128,39 @@ func main() {
 		}
 		extID := os.Args[2]
 		runProposal(ctx, db, extID)
+	case "email-health":
+		runEmailHealth(ctx, cfg)
+	case "email-fetch":
+		runEmailFetch(ctx, cfg, db)
+	case "emails":
+		runEmailList(ctx, db)
+	case "email":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: go run ./cmd/app email <id>")
+			os.Exit(1)
+		}
+		runEmailShow(ctx, db, os.Args[2])
+	case "email-parse":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: go run ./cmd/app email-parse <id>")
+			os.Exit(1)
+		}
+		runEmailParse(ctx, db, os.Args[2])
+	case "telegram-health":
+		runTelegramHealth(ctx, cfg, db)
+	case "telegram-test":
+		runTelegramTest(ctx, cfg, db)
+	case "telegram-retry":
+		runTelegramRetry(ctx, cfg, db)
+	case "process-pending", "pipeline-run":
+		limit := 10 // default
+		if len(os.Args) >= 4 && os.Args[2] == "--limit" {
+			l, _ := strconv.Atoi(os.Args[3])
+			if l > 0 { limit = l }
+		}
+		runProcessPending(ctx, cfg, db, aiClient, limit)
+	case "run", "daemon":
+		runDaemon(ctx, cfg, db, aiClient)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -156,6 +189,16 @@ func printUsage() {
 	fmt.Println("  proposal-batch [--limit 10]   - Generate drafts for suitable projects")
 	fmt.Println("  proposals [--min-score] [--category] - List proposal drafts")
 	fmt.Println("  proposal <id>                 - View specific proposal draft")
+	fmt.Println("  email-health     - Test IMAP credentials")
+	fmt.Println("  email-fetch      - Fetch new Kwork emails")
+	fmt.Println("  emails           - List pending emails")
+	fmt.Println("  email <id>       - Show email details")
+	fmt.Println("  email-parse <id> - Test parse a Kwork email")
+	fmt.Println("  telegram-health  - Test Telegram bot token")
+	fmt.Println("  telegram-test    - Send test message to owner")
+	fmt.Println("  telegram-retry   - Retry failed telegram notifications")
+	fmt.Println("  process-pending  - Process pending emails (pipeline-run)")
+	fmt.Println("  run              - Start the background daemon (IMAP + AI + TG)")
 }
 
 func runAITest(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient) {

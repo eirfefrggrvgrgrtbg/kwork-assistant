@@ -21,6 +21,20 @@ type Config struct {
 	KworkPassword  string
 	KworkPhoneLast string
 	KworkPollLimit int
+
+	IMAPHost          string
+	IMAPPort          int
+	IMAPUsername      string
+	IMAPPassword      string
+	IMAPUseTLS        bool
+	EmailFolder       string
+	EmailPollInterval string
+	EmailLookback     int
+	EmailSender       string
+	EmailSubject      string
+
+	TelegramBotToken    string
+	TelegramOwnerChatID int64
 }
 
 func Load() (*Config, error) {
@@ -33,6 +47,37 @@ func Load() (*Config, error) {
 		KworkLogin:      os.Getenv("KWORK_LOGIN"),
 		KworkPassword:   os.Getenv("KWORK_PASSWORD"),
 		KworkPhoneLast:  os.Getenv("KWORK_PHONE_LAST"),
+		IMAPHost:            os.Getenv("EMAIL_IMAP_HOST"),
+		IMAPUsername:        os.Getenv("EMAIL_IMAP_USERNAME"),
+		IMAPPassword:        os.Getenv("EMAIL_IMAP_PASSWORD"),
+		IMAPUseTLS:          getEnvOrDefault("EMAIL_IMAP_TLS", "true") == "true",
+		EmailFolder:         getEnvOrDefault("EMAIL_FOLDER", "INBOX"),
+		EmailPollInterval:   getEnvOrDefault("EMAIL_POLL_INTERVAL", "60s"),
+		EmailSender:         getEnvOrDefault("EMAIL_SENDER_FILTER", "notify@kwork.ru"),
+		EmailSubject:        os.Getenv("EMAIL_SUBJECT_FILTER"),
+		TelegramBotToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
+	}
+
+	if portStr := os.Getenv("EMAIL_IMAP_PORT"); portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			cfg.IMAPPort = p
+		}
+	} else {
+		cfg.IMAPPort = 993
+	}
+	
+	if lookbackStr := os.Getenv("EMAIL_LOOKBACK_HOURS"); lookbackStr != "" {
+		if lb, err := strconv.Atoi(lookbackStr); err == nil {
+			cfg.EmailLookback = lb
+		}
+	} else {
+		cfg.EmailLookback = 48
+	}
+
+	if chatIDStr := os.Getenv("TELEGRAM_OWNER_CHAT_ID"); chatIDStr != "" {
+		if id, err := strconv.ParseInt(chatIDStr, 10, 64); err == nil {
+			cfg.TelegramOwnerChatID = id
+		}
 	}
 
 	pollLimit, err := parseIntEnv("KWORK_POLL_LIMIT", 50)
