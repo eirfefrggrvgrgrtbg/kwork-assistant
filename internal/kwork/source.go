@@ -54,6 +54,22 @@ func (s *KworkProjectSource) FetchProjects(ctx context.Context, limit int) ([]do
 	return s.client.FetchProjects(ctx, s.token, limit)
 }
 
+// FetchDialogs fetches all dialogs using the unified client.
+func (s *KworkProjectSource) FetchDialogs(ctx context.Context) ([]Dialog, error) {
+	if err := s.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	return s.client.FetchDialogs(ctx, s.token)
+}
+
+// FetchDialogMessages fetches the messages of a specific dialog using the unified client.
+func (s *KworkProjectSource) FetchDialogMessages(ctx context.Context, username string) ([]InboxMessage, error) {
+	if err := s.ensureAuth(ctx); err != nil {
+		return nil, err
+	}
+	return s.client.FetchDialogMessages(ctx, s.token, username)
+}
+
 // Health checks if authentication works.
 func (s *KworkProjectSource) Health(ctx context.Context) error {
 	return s.ensureAuth(ctx)

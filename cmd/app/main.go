@@ -161,6 +161,14 @@ func main() {
 		runProcessPending(ctx, cfg, db, aiClient, limit)
 	case "run", "daemon":
 		runDaemon(ctx, cfg, db, aiClient)
+	case "kwork-dialogs":
+		runKworkDialogs()
+	case "kwork-dialog":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: go run ./cmd/app kwork-dialog <username>")
+			os.Exit(1)
+		}
+		runKworkDialogMessages(os.Args[2])
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -199,6 +207,8 @@ func printUsage() {
 	fmt.Println("  telegram-retry   - Retry failed telegram notifications")
 	fmt.Println("  process-pending  - Process pending emails (pipeline-run)")
 	fmt.Println("  run              - Start the background daemon (IMAP + AI + TG)")
+	fmt.Println("  kwork-dialogs    - List recent Kwork dialogs")
+	fmt.Println("  kwork-dialog <user> - View messages with user")
 }
 
 func runAITest(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient) {
