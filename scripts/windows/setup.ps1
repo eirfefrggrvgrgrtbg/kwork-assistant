@@ -31,7 +31,7 @@ function Set-EnvValue {
     }
     
     [System.IO.File]::WriteAllLines($EnvFile, $newLines)
-    Write-Host "$Key: SET" -ForegroundColor Green
+    Write-Host "${Key}: SET" -ForegroundColor Green
 }
 
 # Helper: Test-TelegramToken

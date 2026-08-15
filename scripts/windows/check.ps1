@@ -49,9 +49,9 @@ foreach ($Var in $EnvVars) {
     }
     
     if ($IsSet) {
-        Write-Host "$Var: SET" -ForegroundColor Green
+        Write-Host "${Var}: SET" -ForegroundColor Green
     } else {
-        Write-Host "$Var: MISSING" -ForegroundColor Red
+        Write-Host "${Var}: MISSING" -ForegroundColor Red
         $script:AllOk = $false
     }
 }

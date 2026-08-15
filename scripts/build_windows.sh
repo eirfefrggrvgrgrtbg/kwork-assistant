@@ -24,8 +24,9 @@ cp docs/README_WINDOWS_DRAFT.md "$DIST_DIR/README_WINDOWS.md"
 
 # Package Zip
 echo "Zipping archive..."
-cd dist
-zip -r "$APP_NAME.zip" "$APP_NAME"
-cd ..
+cd "$DIST_DIR"
+rm -f "../$APP_NAME.zip"
+zip -r "../$APP_NAME.zip" .
+cd ../..
 
 echo "Done! Windows release archive created at dist/$APP_NAME.zip"
