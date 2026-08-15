@@ -34,13 +34,6 @@ func ResolveProjectURL(ctx context.Context, proj domain.Project) string {
 		return ""
 	}
 	
-	// Skip real HTTP calls in unit tests to avoid hanging
-	if strings.HasSuffix(fmt.Sprintf("%v", ctx), "testing") || proj.Title == "Test" || proj.Title == "Test2" || proj.ExternalID < 10000 {
-		// Just a simple heuristic since we don't want to import testing package here if possible.
-		// Actually checking external ID < 10000 is a good heuristic since real Kwork IDs are > 1000000.
-		return ""
-	}
-	
 	candidates := []string{
 		fmt.Sprintf("https://kwork.ru/projects/%d/view", proj.ExternalID),
 		fmt.Sprintf("https://kwork.ru/projects/%d", proj.ExternalID),
@@ -89,21 +82,31 @@ func ResolveProjectURL(ctx context.Context, proj domain.Project) string {
 		bodyStr := string(bodyBytes)
 		normBody := normalizeTitle(bodyStr)
 		
-		// We expect the title to be in the body, or at least the external ID
-		// Wait, external ID is just a number, might false-positive. Let's require strong title match.
+		// 1. Strong Title Match
 		if len(normTitle) > 5 && strings.Contains(normBody, normTitle) {
 			return resp.Request.URL.String()
 		}
 		
-		// If title didn't match perfectly, maybe just check if external ID is clearly marked as project id.
-		// e.g. window.project_id = <ID> or something. But title match is requested.
-		// "Подтверждение: предпочтительно project external ID ИЛИ normalized project title."
-		// Let's also check if external ID is in the HTML.
-		if strings.Contains(bodyStr, fmt.Sprintf("%d", proj.ExternalID)) {
-			// To avoid false positive on just any number, check if it's in a known context or just return it since path didn't redirect to root
-			return resp.Request.URL.String()
+		// 2. Structured ID marker match
+		structuredMarkers := []string{
+			fmt.Sprintf(`project_id":%d`, proj.ExternalID),
+			fmt.Sprintf(`project_id":"%d"`, proj.ExternalID),
+			fmt.Sprintf(`data-project-id="%d"`, proj.ExternalID),
+			fmt.Sprintf(`data-id="%d"`, proj.ExternalID),
+			fmt.Sprintf(`"id":%d`, proj.ExternalID),
+		}
+		
+		for _, marker := range structuredMarkers {
+			if strings.Contains(bodyStr, marker) {
+				return resp.Request.URL.String()
+			}
 		}
 	}
 	
 	return ""
+}
+
+// SetResolverClient allows injecting a custom HTTP client for testing
+func SetResolverClient(c *http.Client) {
+	resolverClient = c
 }

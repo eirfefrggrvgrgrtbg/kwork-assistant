@@ -41,26 +41,28 @@ type ProjectSource interface {
 }
 
 type Watcher struct {
-	cfg       *config.Config
-	db        *database.DB
-	source    ProjectSource
-	evaluator Evaluator
-	model     string
-	promptVer string
-	notifier  Notifier
-	logger    *slog.Logger
+	cfg                 *config.Config
+	db                  *database.DB
+	source              ProjectSource
+	evaluator           Evaluator
+	model               string
+	promptVer           string
+	notifier            Notifier
+	logger              *slog.Logger
+	urlResolveCooldowns map[int64]time.Time
 }
 
 func NewWatcher(cfg *config.Config, db *database.DB, source ProjectSource, evaluator Evaluator, model, promptVer string, notifier Notifier, logger *slog.Logger) *Watcher {
 	return &Watcher{
-		cfg:       cfg,
-		db:        db,
-		source:    source,
-		evaluator: evaluator,
-		model:     model,
-		promptVer: promptVer,
-		notifier:  notifier,
-		logger:    logger.With("component", "projectwatch"),
+		cfg:                 cfg,
+		db:                  db,
+		source:              source,
+		evaluator:           evaluator,
+		model:               model,
+		promptVer:           promptVer,
+		notifier:            notifier,
+		logger:              logger.With("component", "projectwatch"),
+		urlResolveCooldowns: make(map[int64]time.Time),
 	}
 }
 
@@ -99,9 +101,22 @@ func (w *Watcher) Run(ctx context.Context) (RunStats, error) {
 		}
 		
 		if savedProj.URL == "" {
-			if resolvedURL := kwork.ResolveProjectURL(ctx, savedProj); resolvedURL != "" {
-				savedProj.URL = resolvedURL
-				w.db.UpsertProject(ctx, savedProj)
+			shouldResolve := false
+			if isNew {
+				shouldResolve = true
+			} else {
+				lastAttempt, ok := w.urlResolveCooldowns[savedProj.ID]
+				if !ok || time.Since(lastAttempt) > 30*time.Minute {
+					shouldResolve = true
+				}
+			}
+
+			if shouldResolve {
+				w.urlResolveCooldowns[savedProj.ID] = time.Now()
+				if resolvedURL := kwork.ResolveProjectURL(ctx, savedProj); resolvedURL != "" {
+					savedProj.URL = resolvedURL
+					w.db.UpsertProject(ctx, savedProj)
+				}
 			}
 		}
 		
