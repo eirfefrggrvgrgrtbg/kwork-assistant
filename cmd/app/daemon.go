@@ -79,10 +79,14 @@ func fetchEmails(ctx context.Context, cfg *config.Config, db *database.DB) error
 func runPipelineOnce(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient) {
 	fmt.Println("Running Pipeline Once...")
 	
-	err := fetchEmails(ctx, cfg, db)
-	if err != nil {
-		fmt.Printf("Error fetching emails: %v\n", err)
-		// We can continue to process already stored emails
+	if cfg.IMAPHost != "" && cfg.IMAPUsername != "" {
+		err := fetchEmails(ctx, cfg, db)
+		if err != nil {
+			fmt.Printf("Error fetching emails: %v\n", err)
+			// We can continue to process already stored emails
+		}
+	} else {
+		fmt.Println("Email intake disabled (IMAP config missing)")
 	}
 
 	bot, err := telegram.NewBot(cfg, db, slog.Default())
@@ -180,8 +184,10 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 				continue // Paused
 			}
 			
-			// 1. Fetch
-			_ = fetchEmails(ctx, cfg, db) // Ignore errors, keep trying
+			// 1. Fetch (if enabled)
+			if cfg.IMAPHost != "" && cfg.IMAPUsername != "" {
+				_ = fetchEmails(ctx, cfg, db) // Ignore errors, keep trying
+			}
 			
 			// 2. Process pending emails
 			_ = svc.ProcessPending(ctx, 10)

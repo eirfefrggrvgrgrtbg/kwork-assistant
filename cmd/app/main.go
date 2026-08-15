@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +28,15 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load()
+	exePath, err := os.Executable()
+	if err == nil {
+		appDir := filepath.Dir(exePath)
+		_ = os.Chdir(appDir)
+		_ = godotenv.Load(filepath.Join(appDir, ".env"))
+	} else {
+		_ = godotenv.Load()
+	}
+
 	setupLogger()
 
 	if len(os.Args) < 2 {

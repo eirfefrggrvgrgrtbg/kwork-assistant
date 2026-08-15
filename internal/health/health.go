@@ -24,7 +24,7 @@ func Check(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai
 
 	if err := aiClient.Health(ctx); err != nil {
 		slog.Error("Ollama health check failed", "event", "ollama_health_failed", "error", err)
-		return fmt.Errorf("OLLAMA FAILED: %w", err)
+		return fmt.Errorf("OLLAMA NOT RUNNING: Is Ollama started? (error: %w)", err)
 	}
 	slog.Info("Ollama health check passed", "event", "ollama_health_ok")
 	fmt.Println("OLLAMA OK")
