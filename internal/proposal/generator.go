@@ -48,17 +48,25 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 
 	// Attempt 1: normal generation
 	draft, aiResponse, err := g.attemptGeneration(ctx, p, eval, basePrompt, promptVersion)
+	
+	// Validation attempt 1
+	var valErr error
 	if err != nil {
-		return domain.ProposalDraft{}, err
+		valErr = err // treat parse error as validation error to trigger retry
+	} else {
+		valErr = Validate(draft)
 	}
 
-	// Validation attempt 1
-	valErr := Validate(draft)
 	if valErr == nil {
 		g.saveRun(ctx, p, aiResponse.Response, "", 0)
 		return draft, nil
 	}
-	g.saveRun(ctx, p, aiResponse.Response, fmt.Sprintf("attempt1 validation failed: %v", valErr), 0)
+	
+	if aiResponse != nil {
+		g.saveRun(ctx, p, aiResponse.Response, fmt.Sprintf("attempt1 validation failed: %v", valErr), 0)
+	} else {
+		g.saveRun(ctx, p, "ERROR", fmt.Sprintf("attempt1 failed: %v", valErr), 0)
+	}
 
 	// Attempt 2: targeted retry.
 	// If the failure is "too long", give the model explicit char count and instructions to shorten.
@@ -86,16 +94,24 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 	}
 
 	draftRetry, aiResponseRetry, errRetry := g.attemptGeneration(ctx, p, eval, retryPrompt, promptVersion)
+	
+	var valErrRetry error
 	if errRetry != nil {
-		return domain.ProposalDraft{}, fmt.Errorf("retry generation failed: %w", errRetry)
+		valErrRetry = errRetry
+	} else {
+		valErrRetry = Validate(draftRetry)
 	}
 
-	valErrRetry := Validate(draftRetry)
 	if valErrRetry == nil {
 		g.saveRun(ctx, p, aiResponseRetry.Response, "", 0)
 		return draftRetry, nil
 	}
-	g.saveRun(ctx, p, aiResponseRetry.Response, fmt.Sprintf("attempt2 validation failed: %v", valErrRetry), 0)
+	
+	if aiResponseRetry != nil {
+		g.saveRun(ctx, p, aiResponseRetry.Response, fmt.Sprintf("attempt2 validation failed: %v", valErrRetry), 0)
+	} else {
+		g.saveRun(ctx, p, "ERROR", fmt.Sprintf("attempt2 failed: %v", valErrRetry), 0)
+	}
 
 	// Attempt 3: hard compression pass (only for length failures).
 	// Ask the LLM to shorten the *text* of the proposal directly without adding info.
@@ -130,7 +146,7 @@ func (g *Generator) compressionPass(ctx context.Context, p domain.Project, eval 
 		Prompt:          compressionPrompt,
 		Format:          "json",
 		ContextTokens:   4096,
-		MaxOutputTokens: 500,
+		MaxOutputTokens: 1500,
 		Temperature:     0.2,
 		KeepAlive:       "2m",
 	}
@@ -158,7 +174,7 @@ func (g *Generator) attemptGeneration(ctx context.Context, p domain.Project, eva
 		Prompt:          prompt,
 		Format:          "json",
 		ContextTokens:   8192,
-		MaxOutputTokens: 700,
+		MaxOutputTokens: 1500,
 		Temperature:     0.3,
 		KeepAlive:       "2m",
 	}

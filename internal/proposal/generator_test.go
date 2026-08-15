@@ -131,3 +131,62 @@ func TestGenerator_RetryLogic_Failure(t *testing.T) {
 		t.Errorf("expected 2 calls, got %d", mockAI.callCount)
 	}
 }
+
+func TestGenerator_RetryLogic_Length(t *testing.T) {
+	db := getTestDB(t)
+	defer db.Close()
+
+	longProposal := ""
+	for i := 0; i < 1126; i++ {
+		longProposal += "А"
+	}
+
+	mockAI := &MockAIClient{
+		responses: []string{
+			fmt.Sprintf(`{
+				"proposal": "%s",
+				"question": "test",
+				"internal_approach": "test",
+				"confidence": "high",
+				"warnings": []
+			}`, longProposal),
+			`{
+				"proposal": "Короткий ответ 1.",
+				"question": "test",
+				"internal_approach": "test",
+				"confidence": "high",
+				"warnings": []
+			}`,
+		},
+	}
+
+	gen := NewGenerator(db, mockAI, "test-model")
+	
+	p := domain.Project{
+		ID: 1,
+		Title: "Test",
+		Description: "Test",
+	}
+	eval := domain.ProjectEvaluation{
+		ID: 1,
+		Suitable: true,
+		Category: "website",
+		Score: 80,
+	}
+
+	draft, err := gen.Generate(context.Background(), p, eval, "v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mockAI.callCount != 2 {
+		t.Errorf("expected 2 calls (1 failure, 1 retry), got %d", mockAI.callCount)
+	}
+
+	if len([]rune(draft.Proposal)) > 1000 {
+		t.Errorf("expected final proposal length <= 1000, got %d", len([]rune(draft.Proposal)))
+	}
+	if draft.Proposal != "Короткий ответ 1." {
+		t.Errorf("expected shortened proposal, got %s", draft.Proposal)
+	}
+}
