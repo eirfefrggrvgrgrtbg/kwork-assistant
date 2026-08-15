@@ -48,11 +48,10 @@ function Test-TelegramToken($Token) {
     return $null
 }
 
-# Helper: Get-TelegramOwner
 function Get-TelegramOwner($Token) {
     $baselineId = 0
     try {
-        $Updates = Invoke-RestMethod -Uri "https://api.telegram.org/bot$Token/getUpdates?limit=1" -ErrorAction Stop
+        $Updates = Invoke-RestMethod -Uri "https://api.telegram.org/bot$Token/getUpdates?offset=-1&limit=1&timeout=0" -ErrorAction Stop
         if ($Updates.ok -and $Updates.result.Count -gt 0) {
             $baselineId = $Updates.result[-1].update_id
         }
@@ -82,7 +81,7 @@ function Get-TelegramOwner($Token) {
             if ($Resp.ok -and $Resp.result) {
                 foreach ($upd in $Resp.result) {
                     $offset = [Math]::Max($offset, $upd.update_id + 1)
-                    if ($upd.message -and $upd.message.chat.type -eq "private") {
+                    if ($upd.message -and $upd.message.chat.type -eq "private" -and $upd.message.text -match "^/start(\s|$)") {
                         $from = $upd.message.from
                         $chatId = $upd.message.chat.id
                         
@@ -142,6 +141,8 @@ Write-Host "Directories checked."
 $EnvFile = Join-Path $AppDir ".env"
 $EnvExample = Join-Path $AppDir ".env.example"
 
+$UpdateConfig = $true
+
 if (-not (Test-Path $EnvFile)) {
     if (Test-Path $EnvExample) {
         Copy-Item -Path $EnvExample -Destination $EnvFile
@@ -150,8 +151,8 @@ if (-not (Test-Path $EnvFile)) {
 } else {
     $ans = Read-Host "Existing configuration found. Update configuration? [Y/N]"
     if ($ans -notmatch "^[Yy]") {
-        Write-Host "Skipping configuration update."
-        exit 0
+        Write-Host "Keeping existing configuration and continuing."
+        $UpdateConfig = $false
     }
 }
 
@@ -161,69 +162,75 @@ Set-EnvValue "KWORK_PROJECT_POLL_INTERVAL" "60s"
 Set-EnvValue "KWORK_SUITABLE_SCORE" "80"
 Set-EnvValue "KWORK_CHAT_SYNC_ENABLED" "true"
 
-# ==================================================
-# [2/5] Telegram Bot
-# ==================================================
-Write-Host "`n[2/5] Telegram Bot" -ForegroundColor Yellow
-Write-Host "Введите Telegram Bot Token, полученный от @BotFather:"
-$SecureToken = Read-Host -AsSecureString
-$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureToken)
-$Token = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+if ($UpdateConfig) {
+    # ==================================================
+    # [2/5] Telegram Bot
+    # ==================================================
+    Write-Host "`n[2/5] Telegram Bot" -ForegroundColor Yellow
+    Write-Host "Введите Telegram Bot Token, полученный от @BotFather:"
+    $SecureToken = Read-Host -AsSecureString
+    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureToken)
+    $Token = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
 
-$BotInfo = Test-TelegramToken $Token
-if (-not $BotInfo) {
-    Write-Host "[FAIL] Telegram rejected this bot token." -ForegroundColor Red
-    $retry = Read-Host "Retry? [Y/N]"
-    if ($retry -match "^[Yy]") {
-        Write-Host "Please run setup.ps1 again." -ForegroundColor Yellow
-    }
-    exit 1
-}
-
-Write-Host "[OK] Telegram bot connected" -ForegroundColor Green
-Write-Host "Bot username: @$($BotInfo.username)"
-
-Set-EnvValue "TELEGRAM_BOT_TOKEN" $Token
-
-$OwnerChatId = Get-TelegramOwner $Token
-if ($OwnerChatId) {
-    Set-EnvValue "TELEGRAM_OWNER_CHAT_ID" $OwnerChatId
-} else {
-    Write-Host "Failed to get Owner Chat ID. Setup incomplete." -ForegroundColor Red
-    exit 1
-}
-
-# ==================================================
-# [3/5] Kwork Account
-# ==================================================
-Write-Host "`n[3/5] Kwork Account" -ForegroundColor Yellow
-
-$KworkLogin = Read-Host "Kwork login/email"
-
-Write-Host "Kwork password (input hidden):" -NoNewline
-$SecureKworkPass = Read-Host -AsSecureString
-$BSTRPass = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKworkPass)
-$KworkPass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTRPass)
-[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTRPass)
-
-$KworkPhone = Read-Host "Last phone digits (e.g. 1234)"
-
-Set-EnvValue "KWORK_LOGIN" $KworkLogin
-Set-EnvValue "KWORK_PASSWORD" $KworkPass
-Set-EnvValue "KWORK_PHONE_LAST" $KworkPhone
-
-Write-Host "Checking Kwork connection..."
-& $ExeFile kwork-health
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[FAIL] Kwork authentication failed." -ForegroundColor Red
-    $retry = Read-Host "Re-enter Kwork credentials? [Y/N]"
-    if ($retry -match "^[Yy]") {
-        Write-Host "Please run setup.ps1 again to fix credentials."
+    $BotInfo = Test-TelegramToken $Token
+    if (-not $BotInfo) {
+        Write-Host "[FAIL] Telegram rejected this bot token." -ForegroundColor Red
+        $retry = Read-Host "Retry? [Y/N]"
+        if ($retry -match "^[Yy]") {
+            Write-Host "Please run setup.ps1 again." -ForegroundColor Yellow
+        }
         exit 1
     }
-} else {
-    Write-Host "[OK] Kwork authentication successful." -ForegroundColor Green
+
+    Write-Host "[OK] Telegram bot connected" -ForegroundColor Green
+    Write-Host "Bot username: @$($BotInfo.username)"
+
+    Set-EnvValue "TELEGRAM_BOT_TOKEN" $Token
+
+    $OwnerChatId = Get-TelegramOwner $Token
+    if ($OwnerChatId) {
+        Set-EnvValue "TELEGRAM_OWNER_CHAT_ID" $OwnerChatId
+    } else {
+        Write-Host "Failed to get Owner Chat ID. Setup incomplete." -ForegroundColor Red
+        exit 1
+    }
+
+    # ==================================================
+    # [3/5] Kwork Account
+    # ==================================================
+    Write-Host "`n[3/5] Kwork Account" -ForegroundColor Yellow
+
+    $KworkOkLoop = $false
+    while (-not $KworkOkLoop) {
+        $KworkLogin = Read-Host "Kwork login/email"
+
+        Write-Host "Kwork password (input hidden):" -NoNewline
+        $SecureKworkPass = Read-Host -AsSecureString
+        $BSTRPass = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKworkPass)
+        $KworkPass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTRPass)
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTRPass)
+
+        $KworkPhone = Read-Host "Last phone digits (e.g. 1234)"
+
+        Set-EnvValue "KWORK_LOGIN" $KworkLogin
+        Set-EnvValue "KWORK_PASSWORD" $KworkPass
+        Set-EnvValue "KWORK_PHONE_LAST" $KworkPhone
+
+        Write-Host "Checking Kwork connection..."
+        & $ExeFile kwork-health
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Kwork authentication failed." -ForegroundColor Red
+            $retry = Read-Host "Re-enter Kwork credentials? [Y/N]"
+            if ($retry -notmatch "^[Yy]") {
+                Write-Host "Setup incomplete. Exiting." -ForegroundColor Red
+                exit 1
+            }
+        } else {
+            Write-Host "[OK] Kwork authentication successful." -ForegroundColor Green
+            $KworkOkLoop = $true
+        }
+    }
 }
 
 # ==================================================
@@ -292,23 +299,33 @@ Write-Host "`n========================================"
 Write-Host "KWORK ASSISTANT SETUP RESULT"
 Write-Host "========================================"
 
-function Print-Summary($Name, $Ok) {
+$AllOk = $true
+
+function Print-And-Check($Name, $Ok) {
     if ($Ok) {
         Write-Host "[OK] $Name" -ForegroundColor Green
     } else {
         Write-Host "[FAIL] $Name" -ForegroundColor Red
+        $global:AllOk = $false
     }
 }
 
-Print-Summary "Configuration" $true
-Print-Summary "SQLite" $HealthOk
-Print-Summary "Ollama" $HealthOk
-Print-Summary "gemma4:e4b" $HealthOk
-Print-Summary "Kwork" $KworkOk
-Print-Summary "Telegram" $TgOk
-Print-Summary "Owner Chat ID" $true
+Print-And-Check "Configuration" $true
+Print-And-Check "SQLite" $HealthOk
+Print-And-Check "Ollama" $HealthOk
+Print-And-Check "gemma4:e4b" $HealthOk
+Print-And-Check "Kwork" $KworkOk
+Print-And-Check "Telegram" $TgOk
+Print-And-Check "Owner Chat ID" $true
 
-Write-Host "`nSetup completed successfully." -ForegroundColor Green
-Write-Host "Next step:"
-Write-Host ".\start.ps1" -ForegroundColor Cyan
-Write-Host "========================================"
+if ($AllOk) {
+    Write-Host "`nSetup completed successfully." -ForegroundColor Green
+    Write-Host "Next step:"
+    Write-Host ".\start.ps1" -ForegroundColor Cyan
+    Write-Host "========================================"
+} else {
+    Write-Host "`nSetup incomplete." -ForegroundColor Red
+    Write-Host "Run .\check.ps1 for details." -ForegroundColor Yellow
+    Write-Host "========================================"
+    exit 1
+}

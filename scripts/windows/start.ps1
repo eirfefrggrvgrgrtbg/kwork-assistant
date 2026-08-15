@@ -6,16 +6,19 @@ $ConfigOk = $false
 if (Test-Path $EnvFile) {
     $Lines = Get-Content $EnvFile
     $HasTg = $false
+    $HasTgOwner = $false
     $HasKwork = $false
+    $HasKworkPass = $false
+    $HasKworkPhone = $false
+    
     foreach ($Line in $Lines) {
-        if ($Line -match "^TELEGRAM_BOT_TOKEN=(.+)$" -and $matches[1].Trim() -ne "") {
-            $HasTg = $true
-        }
-        if ($Line -match "^KWORK_LOGIN=(.+)$" -and $matches[1].Trim() -ne "") {
-            $HasKwork = $true
-        }
+        if ($Line -match "^TELEGRAM_BOT_TOKEN=(.+)$" -and $matches[1].Trim() -ne "") { $HasTg = $true }
+        if ($Line -match "^TELEGRAM_OWNER_CHAT_ID=(.+)$" -and $matches[1].Trim() -ne "") { $HasTgOwner = $true }
+        if ($Line -match "^KWORK_LOGIN=(.+)$" -and $matches[1].Trim() -ne "") { $HasKwork = $true }
+        if ($Line -match "^KWORK_PASSWORD=(.+)$" -and $matches[1].Trim() -ne "") { $HasKworkPass = $true }
+        if ($Line -match "^KWORK_PHONE_LAST=(.+)$" -and $matches[1].Trim() -ne "") { $HasKworkPhone = $true }
     }
-    if ($HasTg -and $HasKwork) {
+    if ($HasTg -and $HasTgOwner -and $HasKwork -and $HasKworkPass -and $HasKworkPhone) {
         $ConfigOk = $true
     }
 }
@@ -29,6 +32,11 @@ if (-not $ConfigOk) {
 
 Write-Host "Running health checks before starting..."
 & "$AppDir\check.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Pre-flight check failed." -ForegroundColor Red
+    Write-Host "Run .\setup.ps1 or .\check.ps1 and fix the errors." -ForegroundColor Yellow
+    exit 1
+}
 
 $ExeFile = Join-Path $AppDir "kwork-assistant.exe"
 if (-not (Test-Path $ExeFile)) {
