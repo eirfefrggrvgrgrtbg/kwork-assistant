@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"time"
+	"crypto/sha256"
+	"fmt"
+	"encoding/hex"
 )
 
 type Project struct {
@@ -24,6 +27,15 @@ type Project struct {
 	PublishedAt  time.Time
 	FetchedAt    time.Time
 	RawJSON      string
+}
+
+// InputHash returns a deterministic SHA-256 hash of the fields that materially affect AI evaluation.
+// This allows cache invalidation when budget, title, or description changes.
+func (p *Project) InputHash() string {
+	// Format exactly what BuildPrompt uses
+	data := fmt.Sprintf("%s|%s|%.2f|%.2f|%s", p.Title, p.Description, p.BudgetFrom.Float64, p.BudgetTo.Float64, p.CategoryName.String)
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
 }
 
 type ProjectSource interface {
@@ -48,6 +60,7 @@ type ProjectEvaluation struct {
 	Warnings         []string
 	Model            string
 	PromptVersion    string    `json:"prompt_version"`
+	InputHash        string    `json:"input_hash"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 

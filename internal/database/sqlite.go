@@ -91,9 +91,10 @@ func migrate(db *sql.DB) error {
 			warnings_json TEXT,
 			model TEXT NOT NULL,
 			prompt_version TEXT NOT NULL,
+			input_hash TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(project_id) REFERENCES projects(id),
-			UNIQUE(project_id, model, prompt_version)
+			UNIQUE(project_id, model, prompt_version, input_hash)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_pe_project_id ON project_evaluations(project_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_pe_category ON project_evaluations(category);`,
@@ -146,6 +147,46 @@ func migrate(db *sql.DB) error {
 			FOREIGN KEY(project_id) REFERENCES projects(id),
 			UNIQUE(project_id, notification_type)
 		);`,
+		`CREATE TABLE IF NOT EXISTS kwork_conversations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			counterparty_user_id INTEGER NOT NULL,
+			counterparty_username TEXT NOT NULL,
+			counterparty_display_name TEXT,
+			project_id INTEGER,
+			last_external_message_id INTEGER,
+			last_message_at DATETIME,
+			unread_count INTEGER,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(counterparty_user_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS kwork_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			conversation_id INTEGER NOT NULL,
+			external_message_id INTEGER,
+			sender_user_id INTEGER NOT NULL,
+			sender_username TEXT NOT NULL,
+			direction TEXT NOT NULL,
+			text TEXT NOT NULL,
+			sent_at DATETIME NOT NULL,
+			raw_hash TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(conversation_id) REFERENCES kwork_conversations(id),
+			UNIQUE(external_message_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS reply_drafts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			conversation_id INTEGER NOT NULL,
+			context_message_id INTEGER,
+			model_version TEXT NOT NULL,
+			draft_text TEXT NOT NULL,
+			status TEXT NOT NULL,
+			sent_message_id INTEGER,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(conversation_id) REFERENCES kwork_conversations(id),
+			FOREIGN KEY(context_message_id) REFERENCES kwork_messages(id)
+		);`,
 	}
 
 	for _, query := range queries {
@@ -153,6 +194,50 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+
+	// MIGRATION: Add input_hash to project_evaluations if not exists
+	var cols int
+	err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('project_evaluations') WHERE name='input_hash'`).Scan(&cols)
+	if err == nil && cols == 0 {
+		// input_hash column is missing, perform migration
+		_, err = db.Exec(`
+			PRAGMA foreign_keys=off;
+			BEGIN TRANSACTION;
+			ALTER TABLE project_evaluations RENAME TO project_evaluations_old;
+			CREATE TABLE project_evaluations (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				project_id INTEGER NOT NULL,
+				category TEXT NOT NULL,
+				score INTEGER NOT NULL,
+				suitable BOOLEAN NOT NULL,
+				complexity TEXT,
+				budget_assessment TEXT,
+				risk_level TEXT,
+				estimated_effort TEXT,
+				summary TEXT,
+				reasons_json TEXT,
+				warnings_json TEXT,
+				model TEXT NOT NULL,
+				prompt_version TEXT NOT NULL,
+				input_hash TEXT,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY(project_id) REFERENCES projects(id),
+				UNIQUE(project_id, model, prompt_version, input_hash)
+			);
+			INSERT INTO project_evaluations (id, project_id, category, score, suitable, complexity, budget_assessment, risk_level, estimated_effort, summary, reasons_json, warnings_json, model, prompt_version, created_at, input_hash)
+			SELECT id, project_id, category, score, suitable, complexity, budget_assessment, risk_level, estimated_effort, summary, reasons_json, warnings_json, model, prompt_version, created_at, NULL FROM project_evaluations_old;
+			DROP TABLE project_evaluations_old;
+			CREATE INDEX IF NOT EXISTS idx_pe_project_id ON project_evaluations(project_id);
+			CREATE INDEX IF NOT EXISTS idx_pe_category ON project_evaluations(category);
+			CREATE INDEX IF NOT EXISTS idx_pe_score ON project_evaluations(score);
+			COMMIT;
+			PRAGMA foreign_keys=on;
+		`)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -186,6 +271,12 @@ func (db *DB) Health(ctx context.Context) error {
 }
 
 func (db *DB) UpsertProject(ctx context.Context, p domain.Project) (bool, error) {
+	var exists bool
+	err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM projects WHERE source = ? AND external_id = ?)", p.Source, p.ExternalID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
 	query := `
 		INSERT INTO projects (
 			external_id, source, url, title, description,
@@ -223,20 +314,12 @@ func (db *DB) UpsertProject(ctx context.Context, p domain.Project) (bool, error)
 		return false, err
 	}
 
-	rowsAffected, err := res.RowsAffected()
+	_, err = res.RowsAffected()
 	if err != nil {
 		return false, err
 	}
 
-	// SQLite returns 1 for INSERT, and in some versions/drivers it might return 1 for UPDATE if values changed.
-	// We should probably check if it was truly an insert by checking if the row already existed.
-	// But simple UPSERT check logic for our purposes: since we do ON CONFLICT UPDATE, rowsAffected is usually 1.
-	// A better way is to check before, or rely on rowsAffected depending on modernc implementation.
-	// We'll return true if rowsAffected > 0, but to be safe and accurate, let's just return true for now.
-	// Wait, actually "already known" requires knowing if it was inserted or updated.
-	// We can use a trick: `id` is returned if inserted. 
-	// Let's do a SELECT before to know accurately.
-	return rowsAffected > 0, nil
+	return !exists, nil
 }
 
 func (db *DB) IsProjectNew(ctx context.Context, source string, externalID int64) (bool, error) {
@@ -281,6 +364,26 @@ func (db *DB) GetRecentProjects(ctx context.Context, limit int) ([]domain.Projec
 	return projects, rows.Err()
 }
 
+func (db *DB) GetProject(ctx context.Context, id int64) (*domain.Project, error) {
+	query := `
+		SELECT id, external_id, source, url, title, description,
+		       budget_from, budget_to, currency, category_id, category_name,
+		       buyer_id, buyer_name, offers_count, published_at, fetched_at, raw_json
+		FROM projects
+		WHERE id = ?
+	`
+	var p domain.Project
+	err := db.QueryRowContext(ctx, query, id).Scan(
+		&p.ID, &p.ExternalID, &p.Source, &p.URL, &p.Title, &p.Description,
+		&p.BudgetFrom, &p.BudgetTo, &p.Currency, &p.CategoryID, &p.CategoryName,
+		&p.BuyerID, &p.BuyerName, &p.OffersCount, &p.PublishedAt, &p.FetchedAt, &p.RawJSON,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (db *DB) GetProjectByExternalID(ctx context.Context, source string, extID int64) (domain.Project, error) {
 	query := `
 		SELECT id, external_id, source, url, title, description,
@@ -306,13 +409,13 @@ func (db *DB) SaveEvaluation(ctx context.Context, eval domain.ProjectEvaluation)
 		INSERT INTO project_evaluations (
 			project_id, category, score, suitable, complexity,
 			budget_assessment, risk_level, estimated_effort, summary,
-			reasons_json, warnings_json, model, prompt_version
+			reasons_json, warnings_json, model, prompt_version, input_hash
 		) VALUES (
 			?, ?, ?, ?, ?,
 			?, ?, ?, ?,
-			?, ?, ?, ?
+			?, ?, ?, ?, ?
 		)
-		ON CONFLICT(project_id, model, prompt_version) DO UPDATE SET
+		ON CONFLICT(project_id, model, prompt_version, input_hash) DO UPDATE SET
 			category = excluded.category,
 			score = excluded.score,
 			suitable = excluded.suitable,
@@ -327,7 +430,7 @@ func (db *DB) SaveEvaluation(ctx context.Context, eval domain.ProjectEvaluation)
 	_, err := db.ExecContext(ctx, query,
 		eval.ProjectID, eval.Category, eval.Score, eval.Suitable, eval.Complexity,
 		eval.BudgetAssessment, eval.RiskLevel, eval.EstimatedEffort, eval.Summary,
-		string(reasonsJSON), string(warningsJSON), eval.Model, eval.PromptVersion,
+		string(reasonsJSON), string(warningsJSON), eval.Model, eval.PromptVersion, eval.InputHash,
 	)
 	return err
 }
@@ -383,7 +486,7 @@ func (db *DB) GetUnevaluatedProjects(ctx context.Context, model, promptVersion s
 }
 
 func (db *DB) GetEvaluations(ctx context.Context, filter domain.EvaluationFilter) ([]domain.ProjectEvaluation, error) {
-	query := `SELECT id, project_id, category, score, suitable, complexity, budget_assessment, risk_level, estimated_effort, summary, reasons_json, warnings_json, model, prompt_version, created_at FROM project_evaluations WHERE 1=1`
+	query := `SELECT id, project_id, category, score, suitable, complexity, budget_assessment, risk_level, estimated_effort, summary, reasons_json, warnings_json, model, prompt_version, input_hash, created_at FROM project_evaluations WHERE 1=1`
 	var args []interface{}
 
 	if filter.Category != "" {
@@ -412,14 +515,16 @@ func (db *DB) GetEvaluations(ctx context.Context, filter domain.EvaluationFilter
 	for rows.Next() {
 		var e domain.ProjectEvaluation
 		var reasonsStr, warningsStr string
+		var inputHash sql.NullString
 		err := rows.Scan(
 			&e.ID, &e.ProjectID, &e.Category, &e.Score, &e.Suitable, &e.Complexity,
 			&e.BudgetAssessment, &e.RiskLevel, &e.EstimatedEffort, &e.Summary,
-			&reasonsStr, &warningsStr, &e.Model, &e.PromptVersion, &e.CreatedAt,
+			&reasonsStr, &warningsStr, &e.Model, &e.PromptVersion, &inputHash, &e.CreatedAt,
 		)
 		if err != nil {
 			return nil, err
 		}
+		e.InputHash = inputHash.String
 		if reasonsStr != "" {
 			json.Unmarshal([]byte(reasonsStr), &e.Reasons)
 		}
@@ -438,18 +543,22 @@ func (db *DB) GetEvaluationByExternalID(ctx context.Context, source string, extI
 	}
 
 	query := `
-		SELECT id, project_id, category, score, suitable, complexity, budget_assessment, risk_level, estimated_effort, summary, reasons_json, warnings_json, model, prompt_version, created_at
+		SELECT id, project_id, category, score, suitable, complexity, budget_assessment, risk_level, estimated_effort, summary, reasons_json, warnings_json, model, prompt_version, input_hash, created_at
 		FROM project_evaluations
 		WHERE project_id = ?
 		ORDER BY id DESC LIMIT 1
 	`
 	var e domain.ProjectEvaluation
 	var reasonsStr, warningsStr string
+	var inputHash sql.NullString
 	err = db.QueryRowContext(ctx, query, p.ID).Scan(
 		&e.ID, &e.ProjectID, &e.Category, &e.Score, &e.Suitable, &e.Complexity,
 		&e.BudgetAssessment, &e.RiskLevel, &e.EstimatedEffort, &e.Summary,
-		&reasonsStr, &warningsStr, &e.Model, &e.PromptVersion, &e.CreatedAt,
+		&reasonsStr, &warningsStr, &e.Model, &e.PromptVersion, &inputHash, &e.CreatedAt,
 	)
+	if err == nil {
+		e.InputHash = inputHash.String
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Return nil if no evaluation found, rather than error
@@ -810,5 +919,14 @@ func (db *DB) HasTelegramNotification(ctx context.Context, projectID int64, noti
 		return false, err
 	}
 	return true, nil
+}
+
+func (db *DB) GetTelegramNotificationMessageID(ctx context.Context, projectID int64, notificationType domain.NotificationType) (bool, int) {
+	var msgID sql.NullInt64
+	err := db.QueryRowContext(ctx, "SELECT telegram_message_id FROM telegram_notifications WHERE project_id = ? AND notification_type = ?", projectID, notificationType).Scan(&msgID)
+	if err != nil || !msgID.Valid {
+		return false, 0
+	}
+	return true, int(msgID.Int64)
 }
 

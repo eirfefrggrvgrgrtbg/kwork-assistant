@@ -3,6 +3,7 @@ package proposal
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"kwork-assistant/internal/database"
@@ -37,36 +38,115 @@ func (g *Generator) Generate(ctx context.Context, p domain.Project, eval domain.
 	if eval.Score < 60 {
 		return domain.ProposalDraft{}, fmt.Errorf("project score %d is too low (minimum 60)", eval.Score)
 	}
+	return g.generateInternal(ctx, p, eval, promptVersion)
+}
 
-	prompt := BuildPrompt(p, eval)
+// generateInternal contains the 3-attempt generation logic without the eligibility guards.
+// Exposed for unit-testing with a mock AI client (no real DB needed).
+func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval domain.ProjectEvaluation, promptVersion string) (domain.ProposalDraft, error) {
+	basePrompt := BuildPrompt(p, eval)
 
-	draft, aiResponse, err := g.attemptGeneration(ctx, p, eval, prompt, promptVersion)
+	// Attempt 1: normal generation
+	draft, aiResponse, err := g.attemptGeneration(ctx, p, eval, basePrompt, promptVersion)
 	if err != nil {
 		return domain.ProposalDraft{}, err
 	}
 
-	// Validation
-	if err := Validate(draft); err != nil {
-		g.saveRun(ctx, p, aiResponse.Response, fmt.Sprintf("validation failed: %v", err), 0)
-		
-		// AUTO-RETRY (1 time)
-		feedbackPrompt := prompt + fmt.Sprintf("\n\nВНИМАНИЕ! Твой предыдущий ответ был отклонен валидатором по причине: %s.\nИсправь ответ, строго соблюдая правила. Убери выдуманную техническую уверенность или выдуманные примеры.", err.Error())
-		
-		draftRetry, aiResponseRetry, errRetry := g.attemptGeneration(ctx, p, eval, feedbackPrompt, promptVersion)
-		if errRetry != nil {
-			return domain.ProposalDraft{}, fmt.Errorf("retry generation failed: %w", errRetry)
-		}
-		
-		if errRetryVal := Validate(draftRetry); errRetryVal != nil {
-			g.saveRun(ctx, p, aiResponseRetry.Response, fmt.Sprintf("retry validation failed: %v", errRetryVal), 0)
-			return domain.ProposalDraft{}, fmt.Errorf("proposal validation failed after retry: %w", errRetryVal)
-		}
+	// Validation attempt 1
+	valErr := Validate(draft)
+	if valErr == nil {
+		g.saveRun(ctx, p, aiResponse.Response, "", 0)
+		return draft, nil
+	}
+	g.saveRun(ctx, p, aiResponse.Response, fmt.Sprintf("attempt1 validation failed: %v", valErr), 0)
 
-		draft = draftRetry
-		aiResponse = aiResponseRetry
+	// Attempt 2: targeted retry.
+	// If the failure is "too long", give the model explicit char count and instructions to shorten.
+	// Otherwise give generic correction feedback.
+	var retryPrompt string
+	if strings.HasPrefix(valErr.Error(), "proposal too long:") {
+		charCount := len([]rune(draft.Proposal))
+		retryPrompt = basePrompt + fmt.Sprintf(
+			"\n\nВНИМАНИЕ! Предыдущий отклик слишком длинный: %d символов (максимум 1000).\n"+
+				"Сократи его до 700–900 символов.\n"+
+				"Удали второстепенные объяснения.\n"+
+				"Оставь:\n"+
+				"1. понимание задачи;\n"+
+				"2. конкретный подход;\n"+
+				"3. один полезный вопрос.\n"+
+				"НЕ добавляй новые детали.",
+			charCount,
+		)
+	} else {
+		retryPrompt = basePrompt + fmt.Sprintf(
+			"\n\nВНИМАНИЕ! Твой предыдущий ответ был отклонен валидатором по причине: %s.\n"+
+				"Исправь ответ, строго соблюдая правила. Убери выдуманную техническую уверенность или выдуманные примеры.",
+			valErr.Error(),
+		)
 	}
 
-	g.saveRun(ctx, p, aiResponse.Response, "", 0)
+	draftRetry, aiResponseRetry, errRetry := g.attemptGeneration(ctx, p, eval, retryPrompt, promptVersion)
+	if errRetry != nil {
+		return domain.ProposalDraft{}, fmt.Errorf("retry generation failed: %w", errRetry)
+	}
+
+	valErrRetry := Validate(draftRetry)
+	if valErrRetry == nil {
+		g.saveRun(ctx, p, aiResponseRetry.Response, "", 0)
+		return draftRetry, nil
+	}
+	g.saveRun(ctx, p, aiResponseRetry.Response, fmt.Sprintf("attempt2 validation failed: %v", valErrRetry), 0)
+
+	// Attempt 3: hard compression pass (only for length failures).
+	// Ask the LLM to shorten the *text* of the proposal directly without adding info.
+	if strings.HasPrefix(valErrRetry.Error(), "proposal too long:") {
+		compressed, err := g.compressionPass(ctx, p, eval, draftRetry.Proposal, promptVersion)
+		if err != nil {
+			return domain.ProposalDraft{}, fmt.Errorf("compression pass failed: %w", err)
+		}
+		if valErrComp := Validate(compressed); valErrComp != nil {
+			g.saveRun(ctx, p, compressed.Proposal, fmt.Sprintf("attempt3 compression validation failed: %v", valErrComp), 0)
+			return domain.ProposalDraft{}, fmt.Errorf("proposal validation failed after all 3 attempts: %w", valErrComp)
+		}
+		g.saveRun(ctx, p, compressed.Proposal, "", 0)
+		return compressed, nil
+	}
+
+	return domain.ProposalDraft{}, fmt.Errorf("proposal validation failed after retry: %w", valErrRetry)
+}
+
+// compressionPass asks the LLM to shorten an already-generated proposal text.
+// It does NOT regenerate from the project brief — it only compresses the existing text.
+func (g *Generator) compressionPass(ctx context.Context, p domain.Project, eval domain.ProjectEvaluation, tooLongText string, promptVersion string) (domain.ProposalDraft, error) {
+	compressionPrompt := fmt.Sprintf(
+		"Сократи следующий готовый отклик до 700–900 символов, не добавляя новой информации и не меняя смысл. "+
+			"Верни результат ТОЛЬКО в JSON с полями proposal, confidence, estimated_days.\n\n"+
+			"Отклик:\n%s",
+		tooLongText,
+	)
+
+	req := domain.GenerateRequest{
+		Model:           g.modelName,
+		Prompt:          compressionPrompt,
+		Format:          "json",
+		ContextTokens:   4096,
+		MaxOutputTokens: 500,
+		Temperature:     0.2,
+		KeepAlive:       "2m",
+	}
+
+	aiResponse, err := g.aiClient.Generate(ctx, req)
+	if err != nil {
+		g.saveRun(ctx, p, "ERROR", err.Error(), 0)
+		return domain.ProposalDraft{}, fmt.Errorf("AI compression failed: %w", err)
+	}
+
+	draft, err := ParseJSON(aiResponse.Response, p.ID, eval.ID, g.modelName, promptVersion)
+	if err != nil {
+		g.saveRun(ctx, p, aiResponse.Response, err.Error(), 0)
+		return domain.ProposalDraft{}, fmt.Errorf("failed to parse compression response: %w", err)
+	}
+
 	return draft, nil
 }
 
@@ -99,6 +179,9 @@ func (g *Generator) attemptGeneration(ctx context.Context, p domain.Project, eva
 }
 
 func (g *Generator) saveRun(ctx context.Context, p domain.Project, output, errStr string, duration time.Duration) {
+	if g.db == nil {
+		return // no-op in unit tests
+	}
 	run := database.AITestRun{
 		Model:      g.modelName,
 		Input:      fmt.Sprintf("PROPOSAL_DRAFT for Project ID: %d", p.ID),

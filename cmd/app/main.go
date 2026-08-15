@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"kwork-assistant/internal/ai"
+	"kwork-assistant/internal/chat"
 	"kwork-assistant/internal/config"
 	"kwork-assistant/internal/database"
 	"kwork-assistant/internal/domain"
@@ -21,6 +22,8 @@ import (
 	"kwork-assistant/internal/health"
 	"kwork-assistant/internal/kwork"
 	"kwork-assistant/internal/proposal"
+	"kwork-assistant/internal/reply"
+	"kwork-assistant/internal/telegram"
 )
 
 func main() {
@@ -67,6 +70,8 @@ func main() {
 		runKworkCategories(ctx, cfg)
 	case "kwork-fetch":
 		runKworkFetch(ctx, cfg, db)
+	case "kwork-project-watch":
+		runKworkProjectWatch(ctx, cfg, db, aiClient)
 	case "projects":
 		runProjects(ctx, db)
 	case "project":
@@ -169,6 +174,8 @@ func main() {
 			os.Exit(1)
 		}
 		runKworkDialogMessages(os.Args[2])
+	case "chat-sync":
+		runChatSync(ctx, cfg, db, aiClient)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -209,6 +216,7 @@ func printUsage() {
 	fmt.Println("  run              - Start the background daemon (IMAP + AI + TG)")
 	fmt.Println("  kwork-dialogs    - List recent Kwork dialogs")
 	fmt.Println("  kwork-dialog <user> - View messages with user")
+	fmt.Println("  chat-sync        - Trigger manual chat sync pass")
 }
 
 func runAITest(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient) {
@@ -883,4 +891,35 @@ func runProposal(ctx context.Context, db *database.DB, extIDStr string) {
 			fmt.Printf(" - %s\n", w)
 		}
 	}
+}
+
+func runChatSync(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient) {
+	fmt.Println("Triggering manual chat sync...")
+	kworkSrc, err := getKworkSource(cfg)
+	if err != nil {
+		fmt.Printf("Failed to init Kwork source: %v\n", err)
+		os.Exit(1)
+	}
+
+	chatSvc := chat.NewService(db, kworkSrc)
+	
+	// Create bot for notifications (if token exists)
+	var bot *telegram.Bot
+	if cfg.TelegramBotToken != "" {
+		bot, _ = telegram.NewBot(cfg, db, slog.Default())
+		
+		replyGen := reply.NewGenerator(aiClient, db, cfg.OllamaModel, slog.Default())
+		adapter := &ReplyGeneratorAdapter{Gen: replyGen, DB: db}
+		bot.SetReplyGenerator(adapter)
+	}
+	
+	orch := chat.NewSyncOrchestrator(cfg, db, chatSvc, bot)
+	
+	count, err := orch.Run(ctx)
+	if err != nil {
+		fmt.Printf("Chat sync failed: %v\n", err)
+		os.Exit(1)
+	}
+	
+	fmt.Printf("Sync completed. Found %d new incoming messages.\n", count)
 }

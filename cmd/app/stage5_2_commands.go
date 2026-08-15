@@ -31,7 +31,7 @@ func runKworkDialogs() {
 		fmt.Printf("  Last message snippet: %s\n", d.LastMessage)
 		if d.LastMessageObj != nil {
 			direction := "INCOMING"
-			if d.LastMessageObj.FromUsername != d.Username {
+			if d.LastMessageObj.FromUserID != d.UserID {
 				direction = "OUTGOING (ME)"
 			}
 			fmt.Printf("  Last message direction: %s\n", direction)

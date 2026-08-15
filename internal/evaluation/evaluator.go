@@ -44,6 +44,8 @@ func (e *Evaluator) EvaluateProject(ctx context.Context, p domain.Project) (doma
 	if err != nil {
 		return domain.ProjectEvaluation{}, fmt.Errorf("failed to parse AI response: %w", err)
 	}
+	
+	eval.InputHash = p.InputHash()
 
 	return eval, nil
 }

@@ -3,3 +3,7 @@
 /data/*.db-journal
 /kwork-assistant
 /kwork-assistant.test
+/app
+*.log
+*.db
+!data/

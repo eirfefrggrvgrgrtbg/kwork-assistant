@@ -17,10 +17,14 @@ type Config struct {
 	AIMaxOutputTokens int
 	AITemperature     float64
 
-	KworkLogin     string
-	KworkPassword  string
-	KworkPhoneLast string
-	KworkPollLimit int
+	KworkLogin               string
+	KworkPassword            string
+	KworkPhoneLast           string
+	KworkPollLimit           int
+	KworkChatSyncEnabled     bool
+	KworkProjectWatchEnabled bool
+	KworkProjectPollInterval string
+	KworkSuitableScore       int
 
 	IMAPHost          string
 	IMAPPort          int
@@ -39,23 +43,26 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		AppEnv:          getEnvOrDefault("APP_ENV", "development"),
-		DatabasePath:    getEnvOrDefault("DATABASE_PATH", "./data/kwork-assistant.db"),
-		OllamaBaseURL:   getEnvOrDefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-		OllamaModel:     getEnvOrDefault("OLLAMA_MODEL", "gemma4:e4b"),
-		OllamaKeepAlive: getEnvOrDefault("OLLAMA_KEEP_ALIVE", "2m"),
-		KworkLogin:      os.Getenv("KWORK_LOGIN"),
-		KworkPassword:   os.Getenv("KWORK_PASSWORD"),
-		KworkPhoneLast:  os.Getenv("KWORK_PHONE_LAST"),
-		IMAPHost:            os.Getenv("EMAIL_IMAP_HOST"),
-		IMAPUsername:        os.Getenv("EMAIL_IMAP_USERNAME"),
-		IMAPPassword:        os.Getenv("EMAIL_IMAP_PASSWORD"),
-		IMAPUseTLS:          getEnvOrDefault("EMAIL_IMAP_TLS", "true") == "true",
-		EmailFolder:         getEnvOrDefault("EMAIL_FOLDER", "INBOX"),
-		EmailPollInterval:   getEnvOrDefault("EMAIL_POLL_INTERVAL", "60s"),
-		EmailSender:         getEnvOrDefault("EMAIL_SENDER_FILTER", "notify@kwork.ru"),
-		EmailSubject:        os.Getenv("EMAIL_SUBJECT_FILTER"),
-		TelegramBotToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
+		AppEnv:               getEnvOrDefault("APP_ENV", "development"),
+		DatabasePath:         getEnvOrDefault("DATABASE_PATH", "./data/kwork-assistant.db"),
+		OllamaBaseURL:        getEnvOrDefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+		OllamaModel:          getEnvOrDefault("OLLAMA_MODEL", "gemma4:e4b"),
+		OllamaKeepAlive:      getEnvOrDefault("OLLAMA_KEEP_ALIVE", "2m"),
+		KworkLogin:               os.Getenv("KWORK_LOGIN"),
+		KworkPassword:            os.Getenv("KWORK_PASSWORD"),
+		KworkPhoneLast:           os.Getenv("KWORK_PHONE_LAST"),
+		KworkChatSyncEnabled:     getEnvOrDefault("KWORK_CHAT_SYNC_ENABLED", "false") == "true",
+		KworkProjectWatchEnabled: getEnvOrDefault("KWORK_PROJECT_WATCH_ENABLED", "true") == "true",
+		KworkProjectPollInterval: getEnvOrDefault("KWORK_PROJECT_POLL_INTERVAL", "60s"),
+		IMAPHost:             os.Getenv("EMAIL_IMAP_HOST"),
+		IMAPUsername:         os.Getenv("EMAIL_IMAP_USERNAME"),
+		IMAPPassword:         os.Getenv("EMAIL_IMAP_PASSWORD"),
+		IMAPUseTLS:           getEnvOrDefault("EMAIL_IMAP_TLS", "true") == "true",
+		EmailFolder:          getEnvOrDefault("EMAIL_FOLDER", "INBOX"),
+		EmailPollInterval:    getEnvOrDefault("EMAIL_POLL_INTERVAL", "60s"),
+		EmailSender:          getEnvOrDefault("EMAIL_SENDER_FILTER", "notify@kwork.ru"),
+		EmailSubject:         os.Getenv("EMAIL_SUBJECT_FILTER"),
+		TelegramBotToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
 	}
 
 	if portStr := os.Getenv("EMAIL_IMAP_PORT"); portStr != "" {
@@ -85,6 +92,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.KworkPollLimit = pollLimit
+
+	score, err := parseIntEnv("KWORK_SUITABLE_SCORE", 80)
+	if err != nil {
+		return nil, err
+	}
+	cfg.KworkSuitableScore = score
 
 	if cfg.OllamaModel == "" {
 		return nil, fmt.Errorf("OLLAMA_MODEL is required")

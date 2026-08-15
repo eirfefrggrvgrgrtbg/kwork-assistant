@@ -8,10 +8,15 @@ import (
 	"time"
 
 	"kwork-assistant/internal/ai"
+	"kwork-assistant/internal/chat"
 	"kwork-assistant/internal/config"
 	"kwork-assistant/internal/database"
 	"kwork-assistant/internal/email"
+	"kwork-assistant/internal/evaluation"
 	"kwork-assistant/internal/pipeline"
+	"kwork-assistant/internal/projectwatch"
+	"kwork-assistant/internal/proposal"
+	"kwork-assistant/internal/reply"
 	"kwork-assistant/internal/telegram"
 )
 
@@ -27,12 +32,7 @@ func buildEmailConfig(cfg *config.Config) email.Config {
 	}
 }
 
-func buildTelegramConfig(cfg *config.Config) telegram.Config {
-	return telegram.Config{
-		Token:       cfg.TelegramBotToken,
-		OwnerChatID: cfg.TelegramOwnerChatID,
-	}
-}
+
 
 func runEmailHealth(ctx context.Context, cfg *config.Config) {
 	fmt.Println("Testing IMAP Email Health...")
@@ -46,7 +46,7 @@ func runEmailHealth(ctx context.Context, cfg *config.Config) {
 
 func runTelegramHealth(ctx context.Context, cfg *config.Config, db *database.DB) {
 	fmt.Println("Testing Telegram Bot Health...")
-	bot, err := telegram.NewBot(buildTelegramConfig(cfg), db, slog.Default())
+	bot, err := telegram.NewBot(cfg, db, slog.Default())
 	if err != nil {
 		fmt.Printf("Failed to init telegram bot: %v\n", err)
 		os.Exit(1)
@@ -85,7 +85,7 @@ func runPipelineOnce(ctx context.Context, cfg *config.Config, db *database.DB, a
 		// We can continue to process already stored emails
 	}
 
-	bot, err := telegram.NewBot(buildTelegramConfig(cfg), db, slog.Default())
+	bot, err := telegram.NewBot(cfg, db, slog.Default())
 	if err != nil {
 		fmt.Printf("Failed to init telegram bot: %v\n", err)
 		os.Exit(1)
@@ -108,7 +108,7 @@ func runPipelineOnce(ctx context.Context, cfg *config.Config, db *database.DB, a
 func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient) {
 	fmt.Println("Starting Daemon mode (IMAP -> AI -> TG)")
 
-	bot, err := telegram.NewBot(buildTelegramConfig(cfg), db, slog.Default())
+	bot, err := telegram.NewBot(cfg, db, slog.Default())
 	if err != nil {
 		fmt.Printf("Failed to init telegram bot: %v\n", err)
 		os.Exit(1)
@@ -125,8 +125,46 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 	
 	svc := pipeline.NewService(db, aiClient, bot, pipeCfg, slog.Default())
 
+	kworkSrc, err := getKworkSource(cfg)
+	if err != nil {
+		slog.Error("Failed to init Kwork source for chat sync", "error", err)
+	}
+	var chatOrch *chat.SyncOrchestrator
+	if kworkSrc != nil {
+		chatSvc := chat.NewService(db, kworkSrc)
+		chatOrch = chat.NewSyncOrchestrator(cfg, db, chatSvc, bot)
+		bot.SetChatOrchestrator(chatOrch)
+		
+		replyGen := reply.NewGenerator(aiClient, db, cfg.OllamaModel, slog.Default())
+		adapter := &ReplyGeneratorAdapter{Gen: replyGen, DB: db}
+		bot.SetReplyGenerator(adapter)
+
+		propGen := proposal.NewGenerator(db, aiClient, cfg.OllamaModel)
+		propAdapter := &ProposalGeneratorAdapter{
+			Gen:           propGen,
+			DB:            db,
+			Model:         cfg.OllamaModel,
+			PromptVersion: "proposal-v3",
+		}
+		bot.SetProposalGenerator(propAdapter)
+	}
+
+	var pWatcher *projectwatch.Watcher
+	if kworkSrc != nil {
+		evaluator := evaluation.NewEvaluator(aiClient, cfg.OllamaModel, "evaluation-v2")
+		pWatcher = projectwatch.NewWatcher(cfg, db, kworkSrc, evaluator, cfg.OllamaModel, "evaluation-v2", bot, slog.Default())
+	}
+
 	ticker := time.NewTicker(30 * time.Second) // Could be configured
+	
+	// Parse Watcher poll interval
+	pollInterval := 60 * time.Second
+	if d, err := time.ParseDuration(cfg.KworkProjectPollInterval); err == nil {
+		pollInterval = d
+	}
+	projTicker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	defer projTicker.Stop()
 	
 	slog.Info("Daemon loop started")
 
@@ -145,8 +183,27 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 			// 1. Fetch
 			_ = fetchEmails(ctx, cfg, db) // Ignore errors, keep trying
 			
-			// 2. Process
+			// 2. Process pending emails
 			_ = svc.ProcessPending(ctx, 10)
+
+			// 3. Sync Kwork Chats (if enabled)
+			if chatOrch != nil {
+				_, err := chatOrch.Run(ctx)
+				if err != nil {
+					slog.Error("Chat sync failed", "error", err)
+				}
+			}
+		case <-projTicker.C:
+			status, err := db.GetAppMeta(ctx, "auto_processing_enabled")
+			if err != nil || status != "true" {
+				continue
+			}
+			if pWatcher != nil {
+				_, err := pWatcher.Run(ctx)
+				if err != nil {
+					slog.Error("Project watch failed", "error", err)
+				}
+			}
 		}
 	}
 }
