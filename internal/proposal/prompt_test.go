@@ -8,7 +8,7 @@ import (
 	"kwork-assistant/internal/domain"
 )
 
-func TestBuildPrompt_Budget(t *testing.T) {
+func TestBuildPrompt_V5(t *testing.T) {
 	eval := domain.ProjectEvaluation{
 		Category: "website",
 		Summary:  "test summary",
@@ -22,14 +22,11 @@ func TestBuildPrompt_Budget(t *testing.T) {
 		}
 
 		prompt := BuildPrompt(p, eval)
-		if !strings.Contains(prompt, "Вижу бюджет 5000 ₽") {
+		if !strings.Contains(prompt, "Бюджет 5000 ₽ вижу") {
 			t.Errorf("expected EXACT budget format, got: %s", prompt)
 		}
-		if strings.Contains(prompt, "Бюджет не указан") {
-			t.Errorf("expected NO 'Бюджет не указан', got: %s", prompt)
-		}
-		if strings.Contains(prompt, "на какую сумму в этом диапазоне") {
-			t.Errorf("expected NO range question, got: %s", prompt)
+		if !strings.Contains(prompt, "PROPOSAL-V5") {
+			t.Errorf("expected V5 format")
 		}
 	})
 
@@ -41,11 +38,11 @@ func TestBuildPrompt_Budget(t *testing.T) {
 		}
 
 		prompt := BuildPrompt(p, eval)
-		if !strings.Contains(prompt, "Вижу бюджет 5000–15000 ₽") {
+		if !strings.Contains(prompt, "Бюджет 5000–15000 ₽ вижу") {
 			t.Errorf("expected RANGE budget format, got: %s", prompt)
 		}
-		if !strings.Contains(prompt, "на какую сумму в этом диапазоне") {
-			t.Errorf("expected range question, got: %s", prompt)
+		if strings.Contains(prompt, "на какую сумму") {
+			t.Errorf("should NOT ask how much client wants to pay in v5")
 		}
 	})
 
@@ -57,11 +54,33 @@ func TestBuildPrompt_Budget(t *testing.T) {
 		}
 
 		prompt := BuildPrompt(p, eval)
-		if !strings.Contains(prompt, "Бюджет не указан") {
+		if !strings.Contains(prompt, "БЮДЖЕТ не указан") {
 			t.Errorf("expected UNKNOWN budget format, got: %s", prompt)
 		}
-		if !strings.Contains(prompt, "какой бюджет вы закладываете") {
-			t.Errorf("expected unknown question, got: %s", prompt)
+		if !strings.Contains(prompt, "По стоимости смогу сориентировать") {
+			t.Errorf("expected unknown v5 text, got: %s", prompt)
+		}
+	})
+	
+	t.Run("CONSTRAINTS", func(t *testing.T) {
+		p := domain.Project{}
+		prompt := BuildPrompt(p, eval)
+		
+		if !strings.Contains(prompt, "минимум 2 конкретные детали") {
+			t.Error("should ask for project-specific details")
+		}
+		if !strings.Contains(prompt, "ОДНИМ сильным вопросом") {
+			t.Error("should ask for single CTA")
+		}
+		if !strings.Contains(prompt, "Поле 'question' в JSON оставь пустым") {
+			t.Error("should ask to leave question field empty")
+		}
+		if !strings.Contains(prompt, "НЕ спрашивай про дедлайн, если это не самая важная вещь") {
+			t.Error("should not always ask deadline")
+		}
+		if !strings.Contains(prompt, "Мягкий максимум 650") || !strings.Contains(prompt, "ЖЁСТКИЙ МАКСИМУМ 1000") {
+			t.Error("should have length limits")
 		}
 	})
 }
+

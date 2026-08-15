@@ -511,11 +511,34 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 						
 						// Start progress
 						if b.api != nil {
-							msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "⏳ Генерирую отклик...\nПрошло: 0 сек.")
+							etaSecs := 90
+							if b.db != nil {
+								if avg, err := b.db.GetAverageGenerationDuration(ctx, b.cfg.OllamaModel, 5); err == nil && avg > 0 {
+									etaSecs = avg
+								}
+							}
+							
+							formatRemaining := func(r int) string {
+								if r <= 0 {
+									return "⏳ Генерация идёт дольше обычного.\nЕщё немного…"
+								}
+								// Round to 10 seconds
+								r = ((r + 5) / 10) * 10
+								if r == 0 {
+									r = 10
+								}
+								if r >= 60 {
+									return fmt.Sprintf("Осталось примерно: %d мин. %d сек.", r/60, r%60)
+								}
+								return fmt.Sprintf("Осталось примерно: %d сек.", r)
+							}
+
+							initialMsg := fmt.Sprintf("⏳ Генерирую отклик\n%s", formatRemaining(etaSecs))
+							msg := tgbotapi.NewMessage(callback.Message.Chat.ID, initialMsg)
 							sentMsg, err := b.api.Send(msg)
 							if err == nil {
 								progressMsgID = sentMsg.MessageID
-								ticker = time.NewTicker(5 * time.Second)
+								ticker = time.NewTicker(10 * time.Second)
 								done = make(chan bool)
 								startTime := time.Now()
 								
@@ -526,11 +549,9 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 											return
 										case <-ticker.C:
 											elapsed := int(time.Since(startTime).Seconds())
-											timeStr := fmt.Sprintf("%d сек.", elapsed)
-											if elapsed >= 60 {
-												timeStr = fmt.Sprintf("%d мин %d сек.", elapsed/60, elapsed%60)
-											}
-											editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, fmt.Sprintf("⏳ Генерирую отклик...\nПрошло: %s", timeStr))
+											remaining := etaSecs - elapsed
+											
+											editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, fmt.Sprintf("⏳ Генерирую отклик\n%s", formatRemaining(remaining)))
 											b.api.Send(editMsg)
 										}
 									}
@@ -574,8 +595,7 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 						b.logger.Info("proposal_generation_finished", "projectID", projectID, "duration", time.Since(startTime))
 						
 						if progressMsgID != 0 && b.api != nil {
-							elapsed := int(time.Since(startTime).Seconds())
-							editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, fmt.Sprintf("✅ Отклик готов за %d сек.", elapsed))
+							editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, "✅ Отклик готов.")
 							b.api.Send(editMsg)
 						}
 						

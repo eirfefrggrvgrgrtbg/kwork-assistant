@@ -930,3 +930,34 @@ func (db *DB) GetTelegramNotificationMessageID(ctx context.Context, projectID in
 	return true, int(msgID.Int64)
 }
 
+
+// GetAverageGenerationDuration returns the average duration in seconds of the last N successful AI runs.
+func (db *DB) GetAverageGenerationDuration(ctx context.Context, model string, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	query := `
+		SELECT AVG(duration_ms) 
+		FROM (
+			SELECT duration_ms 
+			FROM ai_test_runs 
+			WHERE success = 1 AND model = ? 
+			ORDER BY id DESC 
+			LIMIT ?
+		)`
+	
+	var avgMs sql.NullFloat64
+	err := db.DB.QueryRowContext(ctx, query, model, limit).Scan(&avgMs)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 90, nil
+		}
+		return 90, err
+	}
+	
+	if !avgMs.Valid || avgMs.Float64 == 0 {
+		return 90, nil
+	}
+	
+	return int(avgMs.Float64 / 1000), nil
+}
