@@ -330,4 +330,7 @@ if ($script:AllOk) {
     Write-Host "========================================"
 } else {
     Write-Host "`nSetup incomplete." -ForegroundColor Red
-    Write-Host "Run .
+    Write-Host "Run .\check.ps1 for details." -ForegroundColor Yellow
+    Write-Host "========================================"
+    exit 1
+}
