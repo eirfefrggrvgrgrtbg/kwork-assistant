@@ -9,6 +9,7 @@ import (
 	"kwork-assistant/internal/config"
 	"kwork-assistant/internal/database"
 	"kwork-assistant/internal/domain"
+	"kwork-assistant/internal/kwork"
 )
 
 type RunStats struct {
@@ -95,6 +96,13 @@ func (w *Watcher) Run(ctx context.Context) (RunStats, error) {
 		if err != nil {
 			w.logger.Error("Failed to get saved project", "id", p.ExternalID, "error", err)
 			continue
+		}
+		
+		if savedProj.URL == "" {
+			if resolvedURL := kwork.ResolveProjectURL(ctx, savedProj); resolvedURL != "" {
+				savedProj.URL = resolvedURL
+				w.db.UpsertProject(ctx, savedProj)
+			}
 		}
 		
 		w.evaluateProject(ctx, &savedProj, &stats)

@@ -98,7 +98,7 @@ func runPipelineOnce(ctx context.Context, cfg *config.Config, db *database.DB, a
 	pipeCfg := pipeline.Config{
 		Model:          cfg.OllamaModel,
 		SystemPrompt:   "evaluation-v2",
-		ProposalPrompt: "proposal-v3",
+		ProposalPrompt: proposal.CurrentPromptVersion,
 	}
 	
 	svc := pipeline.NewService(db, aiClient, bot, pipeCfg, slog.Default())
@@ -124,7 +124,7 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 	pipeCfg := pipeline.Config{
 		Model:          cfg.OllamaModel,
 		SystemPrompt:   "evaluation-v2",
-		ProposalPrompt: "proposal-v3",
+		ProposalPrompt: proposal.CurrentPromptVersion,
 	}
 	
 	svc := pipeline.NewService(db, aiClient, bot, pipeCfg, slog.Default())

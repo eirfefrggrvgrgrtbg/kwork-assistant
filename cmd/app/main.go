@@ -718,7 +718,7 @@ func runProposalDraft(ctx context.Context, cfg *config.Config, db *database.DB, 
 		os.Exit(1)
 	}
 
-	promptVersion := "proposal-v3"
+	promptVersion := proposal.CurrentPromptVersion
 
 	if !force {
 		hasDraft, err := db.HasProposalDraft(ctx, eval.ID, cfg.OllamaModel, promptVersion)
@@ -772,7 +772,7 @@ func runProposalDraft(ctx context.Context, cfg *config.Config, db *database.DB, 
 }
 
 func runProposalBatch(ctx context.Context, cfg *config.Config, db *database.DB, aiClient ai.AIClient, limit int) {
-	promptVersion := "proposal-v3"
+	promptVersion := proposal.CurrentPromptVersion
 	evalPromptVersion := "evaluation-v2"
 	projects, err := db.GetProjectsForProposal(ctx, cfg.OllamaModel, evalPromptVersion, promptVersion, limit)
 	if err != nil {
