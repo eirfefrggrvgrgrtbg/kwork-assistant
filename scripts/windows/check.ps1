@@ -4,14 +4,14 @@ Write-Host "========================================"
 Write-Host "       KWORK ASSISTANT CHECK            "
 Write-Host "========================================"
 
-$AllOk = $true
+$script:AllOk = $true
 
 function Print-Status($Name, $Ok) {
     if ($Ok) {
         Write-Host "$Name`: OK" -ForegroundColor Green
     } else {
         Write-Host "$Name`: FAIL" -ForegroundColor Red
-        $global:AllOk = $false
+        $script:AllOk = $false
     }
 }
 
@@ -52,7 +52,7 @@ foreach ($Var in $EnvVars) {
         Write-Host "$Var: SET" -ForegroundColor Green
     } else {
         Write-Host "$Var: MISSING" -ForegroundColor Red
-        $AllOk = $false
+        $script:AllOk = $false
     }
 }
 
@@ -91,7 +91,7 @@ if ($HasExe -and $HasEnv) {
 
 Write-Host "`n"
 
-if (-not $AllOk) {
+if (-not $script:AllOk) {
     exit 1
 }
 exit 0

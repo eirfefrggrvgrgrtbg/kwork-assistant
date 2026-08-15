@@ -299,14 +299,14 @@ Write-Host "`n========================================"
 Write-Host "KWORK ASSISTANT SETUP RESULT"
 Write-Host "========================================"
 
-$AllOk = $true
+$script:AllOk = $true
 
 function Print-And-Check($Name, $Ok) {
     if ($Ok) {
         Write-Host "[OK] $Name" -ForegroundColor Green
     } else {
         Write-Host "[FAIL] $Name" -ForegroundColor Red
-        $global:AllOk = $false
+        $script:AllOk = $false
     }
 }
 
@@ -318,7 +318,7 @@ Print-And-Check "Kwork" $KworkOk
 Print-And-Check "Telegram" $TgOk
 Print-And-Check "Owner Chat ID" $true
 
-if ($AllOk) {
+if ($script:AllOk) {
     Write-Host "`nSetup completed successfully." -ForegroundColor Green
     Write-Host "Next step:"
     Write-Host ".\start.ps1" -ForegroundColor Cyan
