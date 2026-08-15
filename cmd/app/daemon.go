@@ -118,9 +118,6 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 		os.Exit(1)
 	}
 
-	// Start bot polling in background
-	go bot.StartPolling(ctx)
-
 	pipeCfg := pipeline.Config{
 		Model:          cfg.OllamaModel,
 		SystemPrompt:   "evaluation-v2",
@@ -153,49 +150,18 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 		bot.SetProposalGenerator(propAdapter)
 	}
 
+	if err := prewarmAI(ctx, aiClient, cfg); err != nil {
+		os.Exit(1)
+	}
+
 	var pWatcher *projectwatch.Watcher
 	if kworkSrc != nil && cfg.KworkProjectWatchEnabled {
-		fmt.Println("Загружаю локальную AI-модель", cfg.OllamaModel, "...")
-		fmt.Println("При первом запуске это может занять несколько минут.")
-		
-		prewarmDone := make(chan struct{})
-		prewarmErr := make(chan error, 1)
-		
-		go func() {
-			err := aiClient.Prewarm(ctx, cfg.OllamaModel, cfg.OllamaKeepAlive, cfg.AIPrewarmTimeoutSeconds)
-			if err != nil {
-				prewarmErr <- err
-			}
-			close(prewarmDone)
-		}()
-		
-		prewarmTicker := time.NewTicker(25 * time.Second)
-		defer prewarmTicker.Stop()
-		
-	prewarmLoop:
-		for {
-			select {
-			case <-ctx.Done():
-				fmt.Println("Отмена запуска.")
-				os.Exit(1)
-			case err := <-prewarmErr:
-				fmt.Println("Не удалось загрузить локальную AI-модель.")
-				fmt.Println("Убедитесь, что Ollama запущен и модель", cfg.OllamaModel, "установлена.")
-				fmt.Println("После этого запустите Kwork Assistant снова.")
-				fmt.Printf("Ошибка: %v\n", err)
-				os.Exit(1)
-			case <-prewarmDone:
-				fmt.Println("AI-модель готова.")
-				break prewarmLoop
-			case <-prewarmTicker.C:
-				fmt.Println("Модель всё ещё загружается...")
-				fmt.Println("Это нормально на первом запуске.")
-			}
-		}
-		
 		evaluator := evaluation.NewEvaluator(aiClient, cfg.OllamaModel, "evaluation-v2")
 		pWatcher = projectwatch.NewWatcher(cfg, db, kworkSrc, evaluator, cfg.OllamaModel, "evaluation-v2", bot, slog.Default())
 	}
+
+	// Start bot polling in background AFTER prewarm and setup
+	go bot.StartPolling(ctx)
 
 	ticker := time.NewTicker(30 * time.Second) // Could be configured
 	
@@ -248,6 +214,40 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 					slog.Error("Project watch failed", "error", err)
 				}
 			}
+		}
+	}
+}
+
+func prewarmAI(ctx context.Context, aiClient ai.AIClient, cfg *config.Config) error {
+	fmt.Println("Загружаю локальную AI-модель", cfg.OllamaModel, "...")
+	fmt.Println("При первом запуске это может занять несколько минут.")
+	
+	prewarmResult := make(chan error, 1)
+	
+	go func() {
+		prewarmResult <- aiClient.Prewarm(ctx, cfg.OllamaModel, cfg.OllamaKeepAlive, cfg.AIPrewarmTimeoutSeconds)
+	}()
+	
+	prewarmTicker := time.NewTicker(25 * time.Second)
+	defer prewarmTicker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Отмена запуска.")
+			return ctx.Err()
+		case err := <-prewarmResult:
+			if err != nil {
+				fmt.Println("Не удалось загрузить локальную AI-модель.")
+				fmt.Println("Убедитесь, что Ollama запущен и модель", cfg.OllamaModel, "установлена.")
+				fmt.Println("После этого запустите Kwork Assistant снова.")
+				return fmt.Errorf("prewarm failed: %w", err)
+			}
+			fmt.Println("AI-модель готова.")
+			return nil
+		case <-prewarmTicker.C:
+			fmt.Println("Модель всё ещё загружается...")
+			fmt.Println("Это нормально на первом запуске.")
 		}
 	}
 }
