@@ -23,6 +23,8 @@ type mockAIClient struct {
 	callsN   int // total calls made
 }
 
+func (m *mockAIClient) Prewarm(ctx context.Context, modelName string, keepAlive string, timeoutSeconds int) error { return nil }
+
 func (m *mockAIClient) Generate(_ context.Context, req domain.GenerateRequest) (domain.GenerateResponse, error) {
 	m.callsN++
 	if m.callIdx >= len(m.calls) {

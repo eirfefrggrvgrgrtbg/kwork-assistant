@@ -14,6 +14,8 @@ type mockAIClient struct {
 	calls int
 }
 
+func (m *mockAIClient) Prewarm(ctx context.Context, modelName string, keepAlive string, timeoutSeconds int) error { return nil }
+
 func (m *mockAIClient) Generate(ctx context.Context, req domain.GenerateRequest) (domain.GenerateResponse, error) {
 	m.calls++
 	return domain.GenerateResponse{

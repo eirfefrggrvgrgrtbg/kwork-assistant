@@ -16,6 +16,7 @@ type AIClient interface {
 	Generate(ctx context.Context, req domain.GenerateRequest) (domain.GenerateResponse, error)
 	Health(ctx context.Context) error
 	CheckModelExists(ctx context.Context, modelName string) (bool, error)
+	Prewarm(ctx context.Context, modelName string, keepAlive string, timeoutSeconds int) error
 }
 
 type OllamaClient struct {
@@ -180,4 +181,45 @@ func ParseJSONResponse(rawJSON string) (domain.AIJobEvaluation, error) {
 	}
 
 	return eval, nil
+}
+
+func (c *OllamaClient) Prewarm(ctx context.Context, modelName string, keepAlive string, timeoutSeconds int) error {
+	reqBody := ollamaGenerateRequest{
+		Model:     modelName,
+		Prompt:    "Ответь: OK",
+		Stream:    false,
+		KeepAlive: keepAlive,
+		Options: map[string]interface{}{
+			"num_predict": 3,
+			"temperature": 0.0,
+		},
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/generate", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{
+		Timeout: time.Duration(timeoutSeconds) * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("prewarm request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }

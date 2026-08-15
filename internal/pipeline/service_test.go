@@ -11,6 +11,7 @@ import (
 )
 
 type mockAI struct{}
+func (m *mockAI) Prewarm(ctx context.Context, modelName string, keepAlive string, timeoutSeconds int) error { return nil }
 
 func (m *mockAI) Generate(ctx context.Context, req domain.GenerateRequest) (domain.GenerateResponse, error) {
 	return domain.GenerateResponse{

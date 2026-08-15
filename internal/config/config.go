@@ -13,6 +13,7 @@ type Config struct {
 	OllamaModel       string
 	OllamaKeepAlive   string
 	AITimeoutSeconds  int
+	AIPrewarmTimeoutSeconds int
 	AIContextTokens   int
 	AIMaxOutputTokens int
 	AITemperature     float64
@@ -108,6 +109,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.AITimeoutSeconds = timeout
+
+	prewarmTimeout, err := parseIntEnv("AI_PREWARM_TIMEOUT_SECONDS", 300)
+	if err != nil {
+		return nil, err
+	}
+	cfg.AIPrewarmTimeoutSeconds = prewarmTimeout
 
 	ctxTokens, err := parseIntEnv("AI_CONTEXT_TOKENS", 8192)
 	if err != nil {
