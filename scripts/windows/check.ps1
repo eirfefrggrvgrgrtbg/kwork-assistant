@@ -1,3 +1,6 @@
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $AppDir = $PSScriptRoot
 
 Write-Host "========================================"
@@ -37,7 +40,7 @@ $EnvVars = @("TELEGRAM_BOT_TOKEN", "TELEGRAM_OWNER_CHAT_ID", "KWORK_LOGIN", "KWO
 foreach ($Var in $EnvVars) {
     $IsSet = $false
     if ($HasEnv) {
-        $Lines = Get-Content $EnvFile
+        $Lines = [System.IO.File]::ReadAllLines($EnvFile, [System.Text.Encoding]::UTF8)
         foreach ($Line in $Lines) {
             if ($Line -match "^$Var=(.+)$") {
                 $Val = $matches[1].Trim()

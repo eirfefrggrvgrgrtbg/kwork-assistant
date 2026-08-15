@@ -1,3 +1,6 @@
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
 $AppDir = $PSScriptRoot
@@ -13,7 +16,9 @@ function Set-EnvValue {
         New-Item -Path $EnvFile -ItemType File -Force | Out-Null
     }
     
-    $lines = Get-Content $EnvFile
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $lines = if (Test-Path $EnvFile) { [System.IO.File]::ReadAllLines($EnvFile, $utf8NoBom) } else { @() }
+    
     $found = $false
     $newLines = @()
     
@@ -30,7 +35,7 @@ function Set-EnvValue {
         $newLines += "$Key=$Value"
     }
     
-    [System.IO.File]::WriteAllLines($EnvFile, $newLines)
+    [System.IO.File]::WriteAllLines($EnvFile, $newLines, $utf8NoBom)
     Write-Host "${Key}: SET" -ForegroundColor Green
 }
 
@@ -325,7 +330,4 @@ if ($script:AllOk) {
     Write-Host "========================================"
 } else {
     Write-Host "`nSetup incomplete." -ForegroundColor Red
-    Write-Host "Run .\check.ps1 for details." -ForegroundColor Yellow
-    Write-Host "========================================"
-    exit 1
-}
+    Write-Host "Run .
