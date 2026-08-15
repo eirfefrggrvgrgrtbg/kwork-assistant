@@ -218,7 +218,7 @@ func (b *Bot) SendSuitableProjectNotification(project *domain.Project, eval *dom
 	var row []tgbotapi.InlineKeyboardButton
 	row = append(row, btnGen)
 	if project.URL != "" {
-		btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть Kwork", project.URL)
+		btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть заказ", project.URL)
 		row = append(row, btnKwork)
 	}
 	
@@ -276,7 +276,7 @@ func (b *Bot) UpdateSuitableProjectNotification(project *domain.Project, eval *d
 		var row []tgbotapi.InlineKeyboardButton
 		row = append(row, btnGen)
 		if project.URL != "" {
-			btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть Kwork", project.URL)
+			btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть заказ", project.URL)
 			row = append(row, btnKwork)
 		}
 		keyboard = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(row...))
@@ -285,7 +285,7 @@ func (b *Bot) UpdateSuitableProjectNotification(project *domain.Project, eval *d
 			eval.Score, eval.Category, titleStr, budgetStr, eval.Summary)
 		var row []tgbotapi.InlineKeyboardButton
 		if project.URL != "" {
-			btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть Kwork", project.URL)
+			btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть заказ", project.URL)
 			row = append(row, btnKwork)
 		}
 		if len(row) > 0 {
@@ -466,12 +466,6 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 			fmt.Sscanf(parts[1], "%d", &projectID)
 
 			if b.propGen != nil {
-				// ACK the callback immediately with text
-				callbackConfig := tgbotapi.NewCallback(callback.ID, "Генерирую отклик...")
-				if b.api != nil {
-					b.api.Request(callbackConfig)
-				}
-
 				go func() {
 					ctx := context.Background()
 					proj, err := b.db.GetProject(ctx, projectID)
@@ -479,13 +473,12 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 						b.logger.Error("failed to get project", "projectID", projectID, "error", err)
 						return
 					}
-					
 					eval, err := b.db.GetEvaluationByExternalID(ctx, proj.Source, proj.ExternalID)
 					if err != nil {
 						b.logger.Error("failed to get evaluation", "projectID", projectID, "error", err)
 						return
 					}
-					
+
 					if eval.Score < b.cfg.KworkSuitableScore || !eval.Suitable || (eval.Category != "website" && eval.Category != "telegram") {
 						msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "⚠️ Проект был переоценён и больше не проходит текущий порог 80.")
 						if b.api != nil {
@@ -494,34 +487,112 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 						return
 					}
 
+					// Check if we already have a draft for proposal-v4
+					isCached := false
+					if !forceRegen {
+						draft, err := b.db.GetProposalDraftByExternalID(ctx, proj.Source, proj.ExternalID)
+						if err == nil && draft != nil && draft.EvaluationID == eval.ID && draft.PromptVersion == "proposal-v4" {
+							isCached = true
+						}
+					}
+					
+					var progressMsgID int
+					var ticker *time.Ticker
+					var done chan bool
+					
+					if isCached {
+						// ACK the callback
+						callbackConfig := tgbotapi.NewCallback(callback.ID, "✅ Использую сохранённый отклик.")
+						if b.api != nil {
+							b.api.Request(callbackConfig)
+						}
+					} else {
+						// ACK the callback
+						callbackConfig := tgbotapi.NewCallback(callback.ID, "Генерирую отклик...")
+						if b.api != nil {
+							b.api.Request(callbackConfig)
+						}
+						
+						// Start progress
+						if b.api != nil {
+							msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "⏳ Генерирую отклик...\nПрошло: 0 сек.")
+							sentMsg, err := b.api.Send(msg)
+							if err == nil {
+								progressMsgID = sentMsg.MessageID
+								ticker = time.NewTicker(5 * time.Second)
+								done = make(chan bool)
+								startTime := time.Now()
+								
+								go func() {
+									for {
+										select {
+										case <-done:
+											return
+										case <-ticker.C:
+											elapsed := int(time.Since(startTime).Seconds())
+											timeStr := fmt.Sprintf("%d сек.", elapsed)
+											if elapsed >= 60 {
+												timeStr = fmt.Sprintf("%d мин %d сек.", elapsed/60, elapsed%60)
+											}
+											editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, fmt.Sprintf("⏳ Генерирую отклик...\nПрошло: %s", timeStr))
+											b.api.Send(editMsg)
+										}
+									}
+								}()
+							}
+						}
+					}
+
 					b.logger.Info("proposal_generation_started", "projectID", projectID)
 					startTime := time.Now()
 					
 					text, err := b.propGen.GenerateDraft(ctx, projectID, forceRegen)
+					
+					// Stop ticker
+					if ticker != nil {
+						ticker.Stop()
+						done <- true
+					}
+					
 					if err != nil {
 						b.logger.Error("proposal_generation_failed", "projectID", projectID, "error", err, "duration", time.Since(startTime))
 						
-						// Send failure message with inline button to retry
-						msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "⚠️ Не удалось сгенерировать отклик.\nПопробуйте ещё раз.")
-						btnRetry := tgbotapi.NewInlineKeyboardButtonData("🔄 Попробовать снова", fmt.Sprintf("regenerate_proposal:%d", projectID))
-						msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(btnRetry))
-						if b.api != nil {
-							b.api.Send(msg)
+						elapsed := int(time.Since(startTime).Seconds())
+						if progressMsgID != 0 && b.api != nil {
+							editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, fmt.Sprintf("⚠️ Не удалось сгенерировать отклик за %d сек.\nПопробуйте ещё раз.", elapsed))
+							btnRetry := tgbotapi.NewInlineKeyboardButtonData("🔄 Попробовать снова", fmt.Sprintf("regenerate_proposal:%d", projectID))
+							keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(btnRetry))
+							editMarkup := tgbotapi.NewEditMessageReplyMarkup(callback.Message.Chat.ID, progressMsgID, keyboard)
+							b.api.Send(editMsg)
+							b.api.Send(editMarkup)
+						} else {
+							// Send new failure message if progress failed to send
+							msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "⚠️ Не удалось сгенерировать отклик.\nПопробуйте ещё раз.")
+							btnRetry := tgbotapi.NewInlineKeyboardButtonData("🔄 Попробовать снова", fmt.Sprintf("regenerate_proposal:%d", projectID))
+							msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(btnRetry))
+							if b.api != nil {
+								b.api.Send(msg)
+							}
 						}
 					} else {
 						b.logger.Info("proposal_generation_finished", "projectID", projectID, "duration", time.Since(startTime))
+						
+						if progressMsgID != 0 && b.api != nil {
+							elapsed := int(time.Since(startTime).Seconds())
+							editMsg := tgbotapi.NewEditMessageText(callback.Message.Chat.ID, progressMsgID, fmt.Sprintf("✅ Отклик готов за %d сек.", elapsed))
+							b.api.Send(editMsg)
+						}
+						
 						// Send the text
 						msg := tgbotapi.NewMessage(callback.Message.Chat.ID, "📝 <b>Готовый отклик</b>\n\n<pre>"+text+"</pre>")
 						msg.ParseMode = tgbotapi.ModeHTML
 						
 						btnRegen := tgbotapi.NewInlineKeyboardButtonData("🔄 Перегенерировать", fmt.Sprintf("regenerate_proposal:%d", projectID))
 						
-						// Need URL to project
-						proj, err := b.db.GetProject(context.Background(), projectID)
 						var row []tgbotapi.InlineKeyboardButton
 						row = append(row, btnRegen)
-						if err == nil && proj.URL != "" {
-							btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть Kwork", proj.URL)
+						if proj.URL != "" {
+							btnKwork := tgbotapi.NewInlineKeyboardButtonURL("🔗 Открыть заказ", proj.URL)
 							row = append(row, btnKwork)
 						}
 						msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(row...))

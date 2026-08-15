@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type ChatOrchestrator interface {
@@ -38,42 +36,20 @@ func (b *Bot) handleOrders(ctx context.Context) string {
 		return "Ошибка БД: " + err.Error()
 	}
 
-	var sb strings.Builder
-	sb.WriteString("🔥 Подходящие заказы\n\n")
-	
-	var kbRows [][]tgbotapi.InlineKeyboardButton
-
-	for _, p := range projects {
-		budgetStr := "Бюджет не указан"
-		if p.BudgetFrom.Valid && p.BudgetTo.Valid && p.BudgetFrom.Float64 > 0 && p.BudgetTo.Float64 > 0 && p.BudgetFrom.Float64 != p.BudgetTo.Float64 {
-			budgetStr = fmt.Sprintf("💰 %.0f–%.0f ₽", p.BudgetFrom.Float64, p.BudgetTo.Float64)
-		} else {
-			val := p.BudgetTo.Float64
-			if val == 0 && p.BudgetFrom.Valid {
-				val = p.BudgetFrom.Float64
-			}
-			if val > 0 {
-				budgetStr = fmt.Sprintf("💰 %.0f ₽", val)
-			}
-		}
-
-		sb.WriteString(fmt.Sprintf("[%d] %s\n%s\n%s\n\n", p.Score, strings.ToUpper(p.Category), p.Title, budgetStr))
-		
-		btn := tgbotapi.NewInlineKeyboardButtonData(
-			"📝 Сгенерировать отклик", 
-			fmt.Sprintf("generate_proposal:%d", p.ID),
-		)
-		kbRows = append(kbRows, tgbotapi.NewInlineKeyboardRow(btn))
-	}
-	
 	if len(projects) == 0 {
 		return fmt.Sprintf("Сейчас нет подходящих заказов с оценкой ≥%d.", b.cfg.KworkSuitableScore)
 	}
 
-	if b.api != nil {
-		msg := tgbotapi.NewMessage(b.cfg.TelegramOwnerChatID, sb.String())
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(kbRows...)
-		b.api.Send(msg)
+	for _, p := range projects {
+		proj, err := b.db.GetProject(ctx, p.ID)
+		if err != nil || proj == nil {
+			continue
+		}
+		eval, err := b.db.GetEvaluationByExternalID(ctx, proj.Source, proj.ExternalID)
+		if err != nil || eval == nil {
+			continue
+		}
+		b.SendSuitableProjectNotification(proj, eval)
 	}
 	
 	return ""

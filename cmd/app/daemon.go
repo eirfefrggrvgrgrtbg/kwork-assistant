@@ -148,7 +148,7 @@ func runDaemon(ctx context.Context, cfg *config.Config, db *database.DB, aiClien
 			Gen:           propGen,
 			DB:            db,
 			Model:         cfg.OllamaModel,
-			PromptVersion: "proposal-v3",
+			PromptVersion: "proposal-v4",
 		}
 		bot.SetProposalGenerator(propAdapter)
 	}

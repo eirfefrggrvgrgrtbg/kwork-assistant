@@ -288,7 +288,7 @@ func (db *DB) UpsertProject(ctx context.Context, p domain.Project) (bool, error)
 			?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(source, external_id) DO UPDATE SET
-			url = excluded.url,
+			url = COALESCE(NULLIF(excluded.url, ''), url),
 			title = excluded.title,
 			description = excluded.description,
 			budget_from = excluded.budget_from,

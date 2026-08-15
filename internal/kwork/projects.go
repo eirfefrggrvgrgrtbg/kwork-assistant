@@ -94,6 +94,7 @@ func ParseProject(item map[string]interface{}) domain.Project {
 
 	proj.ExternalID = id
 	proj.Source = "kwork"
+	proj.URL = fmt.Sprintf("https://kwork.ru/projects/%d/view", id)
 	proj.Title = title
 	proj.Description = desc
 	proj.BudgetFrom = sql.NullFloat64{Float64: priceFloat, Valid: priceFloat > 0}
