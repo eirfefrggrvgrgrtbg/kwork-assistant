@@ -94,3 +94,21 @@ func TestParseProject_Budget(t *testing.T) {
 		})
 	}
 }
+
+func TestParseProject_ExactBudget(t *testing.T) {
+	raw := map[string]interface{}{
+		"id": float64(123),
+		"name": "Test",
+		"price": float64(5000),
+	}
+	
+	proj := ParseProject(raw)
+	
+	budget := proj.GetBudget()
+	if budget.Type != "EXACT" {
+		t.Errorf("expected EXACT budget, got %s", budget.Type)
+	}
+	if budget.Min != 5000 || budget.Max != 5000 {
+		t.Errorf("expected 5000, got %f-%f", budget.Min, budget.Max)
+	}
+}

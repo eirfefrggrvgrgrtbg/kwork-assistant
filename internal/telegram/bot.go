@@ -192,16 +192,14 @@ func (b *Bot) SendSuitableProjectNotification(project *domain.Project, eval *dom
 	}
 
 	var budgetStr string
-	if (!project.BudgetFrom.Valid || project.BudgetFrom.Float64 == 0) && (!project.BudgetTo.Valid || project.BudgetTo.Float64 == 0) {
+	budget := project.GetBudget()
+	switch budget.Type {
+	case domain.BudgetRange:
+		budgetStr = fmt.Sprintf("%s–%s ₽", formatThousands(budget.Min), formatThousands(budget.Max))
+	case domain.BudgetExact:
+		budgetStr = fmt.Sprintf("%s ₽", formatThousands(budget.Min))
+	case domain.BudgetUnknown:
 		budgetStr = "не указан"
-	} else if project.BudgetFrom.Valid && project.BudgetTo.Valid && project.BudgetFrom.Float64 != project.BudgetTo.Float64 && project.BudgetFrom.Float64 > 0 && project.BudgetTo.Float64 > 0 {
-		budgetStr = fmt.Sprintf("%s–%s ₽", formatThousands(project.BudgetFrom.Float64), formatThousands(project.BudgetTo.Float64))
-	} else {
-		val := project.BudgetTo.Float64
-		if val == 0 && project.BudgetFrom.Valid {
-			val = project.BudgetFrom.Float64
-		}
-		budgetStr = fmt.Sprintf("%s ₽", formatThousands(val))
 	}
 
 	titleStr := fmt.Sprintf("<b>%s</b>", project.Title)
@@ -249,16 +247,14 @@ func (b *Bot) UpdateSuitableProjectNotification(project *domain.Project, eval *d
 	}
 
 	var budgetStr string
-	if (!project.BudgetFrom.Valid || project.BudgetFrom.Float64 == 0) && (!project.BudgetTo.Valid || project.BudgetTo.Float64 == 0) {
+	budget := project.GetBudget()
+	switch budget.Type {
+	case domain.BudgetRange:
+		budgetStr = fmt.Sprintf("%s–%s ₽", formatThousands(budget.Min), formatThousands(budget.Max))
+	case domain.BudgetExact:
+		budgetStr = fmt.Sprintf("%s ₽", formatThousands(budget.Min))
+	case domain.BudgetUnknown:
 		budgetStr = "не указан"
-	} else if project.BudgetFrom.Valid && project.BudgetTo.Valid && project.BudgetFrom.Float64 != project.BudgetTo.Float64 && project.BudgetFrom.Float64 > 0 && project.BudgetTo.Float64 > 0 {
-		budgetStr = fmt.Sprintf("%s–%s ₽", formatThousands(project.BudgetFrom.Float64), formatThousands(project.BudgetTo.Float64))
-	} else {
-		val := project.BudgetTo.Float64
-		if val == 0 && project.BudgetFrom.Valid {
-			val = project.BudgetFrom.Float64
-		}
-		budgetStr = fmt.Sprintf("%s ₽", formatThousands(val))
 	}
 
 	titleStr := fmt.Sprintf("<b>%s</b>", project.Title)

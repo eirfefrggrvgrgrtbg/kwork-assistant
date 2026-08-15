@@ -20,8 +20,11 @@ func FormatSuitableProject(p domain.Project, eval domain.ProjectEvaluation, draf
 	sb.WriteString(fmt.Sprintf("<b>%s</b>\n\n", escapeHTML(p.Title)))
 
 	budgetStr := "не указан"
-	if p.BudgetTo.Valid && p.BudgetTo.Float64 > 0 {
-		budgetStr = fmt.Sprintf("%.0f %s", p.BudgetTo.Float64, p.Currency.String)
+	budget := p.GetBudget()
+	if budget.Type == domain.BudgetRange {
+		budgetStr = fmt.Sprintf("%.0f–%.0f %s", budget.Min, budget.Max, p.Currency.String)
+	} else if budget.Type == domain.BudgetExact {
+		budgetStr = fmt.Sprintf("%.0f %s", budget.Min, p.Currency.String)
 	}
 	sb.WriteString(fmt.Sprintf("💰 Бюджет: %s\n", budgetStr))
 	

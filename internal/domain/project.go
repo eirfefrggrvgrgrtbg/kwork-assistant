@@ -38,6 +38,38 @@ func (p *Project) InputHash() string {
 	return hex.EncodeToString(hash[:])
 }
 
+type BudgetType string
+
+const (
+	BudgetRange   BudgetType = "RANGE"
+	BudgetExact   BudgetType = "EXACT"
+	BudgetUnknown BudgetType = "UNKNOWN"
+)
+
+type Budget struct {
+	Type BudgetType
+	Min  float64
+	Max  float64
+}
+
+func (p *Project) GetBudget() Budget {
+	bf := 0.0
+	bt := 0.0
+	if p.BudgetFrom.Valid { bf = p.BudgetFrom.Float64 }
+	if p.BudgetTo.Valid { bt = p.BudgetTo.Float64 }
+
+	if bf > 0 && bt > bf {
+		return Budget{Type: BudgetRange, Min: bf, Max: bt}
+	}
+	if bf > 0 && (bt <= 0 || bt == bf) {
+		return Budget{Type: BudgetExact, Min: bf, Max: bf}
+	}
+	if bf <= 0 && bt > 0 {
+		return Budget{Type: BudgetExact, Min: bt, Max: bt}
+	}
+	return Budget{Type: BudgetUnknown}
+}
+
 type ProjectSource interface {
 	Health(ctx context.Context) error
 	GetMe(ctx context.Context) (int64, string, error)

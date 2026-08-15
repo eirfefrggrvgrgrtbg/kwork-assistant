@@ -20,16 +20,17 @@ func BuildPrompt(p domain.Project, eval domain.ProjectEvaluation) string {
 	b.WriteString("   - Начни с: \"Здравствуйте! Я full-stack разработчик, задачу посмотрел.\"\n")
 	b.WriteString("   - Покажи ОДНИМ-ДВУМЯ предложениями, что понял суть задачи.\n")
 	
+	budget := p.GetBudget()
 	budgetStr := "не указан"
-	if p.BudgetTo.Valid && p.BudgetTo.Float64 > 0 {
-		if p.BudgetFrom.Valid && p.BudgetFrom.Float64 > 0 && p.BudgetFrom.Float64 != p.BudgetTo.Float64 {
-			budgetStr = fmt.Sprintf("range: %.0f–%.0f %s", p.BudgetFrom.Float64, p.BudgetTo.Float64, p.Currency.String)
-			b.WriteString(fmt.Sprintf("   - Затем про бюджет (у клиента %s). Напиши: \"Вижу бюджет %.0f–%.0f ₽ — подскажите, на какую сумму в этом диапазоне вы ориентируетесь?\"\n", budgetStr, p.BudgetFrom.Float64, p.BudgetTo.Float64))
-		} else {
-			budgetStr = fmt.Sprintf("exact: %.0f %s", p.BudgetTo.Float64, p.Currency.String)
-			b.WriteString(fmt.Sprintf("   - Затем про бюджет (у клиента %s). Напиши: \"Вижу бюджет %.0f ₽. После уточнения полного объёма скажу, укладывается ли задача в него.\"\n", budgetStr, p.BudgetTo.Float64))
-		}
-	} else {
+
+	switch budget.Type {
+	case domain.BudgetRange:
+		budgetStr = fmt.Sprintf("range: %.0f–%.0f %s", budget.Min, budget.Max, p.Currency.String)
+		b.WriteString(fmt.Sprintf("   - Затем про бюджет (у клиента %s). Напиши: \"Вижу бюджет %.0f–%.0f ₽ — подскажите, на какую сумму в этом диапазоне вы ориентируетесь?\"\n", budgetStr, budget.Min, budget.Max))
+	case domain.BudgetExact:
+		budgetStr = fmt.Sprintf("exact: %.0f %s", budget.Min, p.Currency.String)
+		b.WriteString(fmt.Sprintf("   - Затем про бюджет (у клиента %s). Напиши: \"Вижу бюджет %.0f ₽. После уточнения полного объёма скажу, укладывается ли задача в него.\"\n", budgetStr, budget.Min))
+	case domain.BudgetUnknown:
 		b.WriteString("   - Бюджет не указан. Напиши: \"Подскажите, какой бюджет вы закладываете?\"\n")
 	}
 
