@@ -60,7 +60,7 @@ func (a *ProposalGeneratorAdapter) GenerateDraft(ctx context.Context, projectID 
 	// Check for existing draft if not forcing regenerate
 	if !forceRegenerate {
 		draft, err := a.DB.GetProposalDraftByExternalID(ctx, proj.Source, proj.ExternalID)
-		if err == nil && draft != nil && draft.EvaluationID == eval.ID {
+		if err == nil && draft != nil && draft.EvaluationID == eval.ID && draft.PromptVersion == a.PromptVersion {
 			res := draft.Proposal
 			if draft.Question != "" {
 				res += "\n\n❓ " + draft.Question

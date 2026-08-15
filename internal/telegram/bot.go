@@ -11,6 +11,7 @@ import (
 	"kwork-assistant/internal/config"
 	"kwork-assistant/internal/database"
 	"kwork-assistant/internal/domain"
+	"kwork-assistant/internal/proposal"
 )
 
 type Bot struct {
@@ -483,11 +484,11 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 						return
 					}
 
-					// Check if we already have a draft for proposal-v4
+					// Check if we already have a draft for current prompt version
 					isCached := false
 					if !forceRegen {
 						draft, err := b.db.GetProposalDraftByExternalID(ctx, proj.Source, proj.ExternalID)
-						if err == nil && draft != nil && draft.EvaluationID == eval.ID && draft.PromptVersion == "proposal-v4" {
+						if err == nil && draft != nil && draft.EvaluationID == eval.ID && draft.PromptVersion == proposal.CurrentPromptVersion {
 							isCached = true
 						}
 					}
@@ -568,7 +569,7 @@ func (b *Bot) handleCallback(ctx context.Context, callback *tgbotapi.CallbackQue
 					// Stop ticker
 					if ticker != nil {
 						ticker.Stop()
-						done <- true
+						close(done)
 					}
 					
 					if err != nil {

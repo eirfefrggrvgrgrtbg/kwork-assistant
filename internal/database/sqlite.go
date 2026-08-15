@@ -931,33 +931,62 @@ func (db *DB) GetTelegramNotificationMessageID(ctx context.Context, projectID in
 }
 
 
-// GetAverageGenerationDuration returns the average duration in seconds of the last N successful AI runs.
+// GetAverageGenerationDuration returns the median duration in seconds of the last N successful AI proposal runs.
 func (db *DB) GetAverageGenerationDuration(ctx context.Context, model string, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 5
 	}
+	// We want the median of the last N successful proposal runs, clamped between 20s and 180s.
+	// Since SQLite doesn't have a built-in MEDIAN aggregate function easily, we will fetch the rows and compute it in Go.
 	query := `
-		SELECT AVG(duration_ms) 
-		FROM (
-			SELECT duration_ms 
-			FROM ai_test_runs 
-			WHERE success = 1 AND model = ? 
-			ORDER BY id DESC 
-			LIMIT ?
-		)`
+		SELECT duration_ms 
+		FROM ai_test_runs 
+		WHERE success = 1 AND model = ? AND input LIKE 'PROPOSAL_DRAFT%' AND duration_ms > 0
+		ORDER BY id DESC 
+		LIMIT ?
+	`
 	
-	var avgMs sql.NullFloat64
-	err := db.DB.QueryRowContext(ctx, query, model, limit).Scan(&avgMs)
+	rows, err := db.DB.QueryContext(ctx, query, model, limit)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return 90, nil
-		}
 		return 90, err
 	}
-	
-	if !avgMs.Valid || avgMs.Float64 == 0 {
+	defer rows.Close()
+
+	var durations []int64
+	for rows.Next() {
+		var d int64
+		if err := rows.Scan(&d); err == nil {
+			durations = append(durations, d)
+		}
+	}
+
+	if len(durations) < 2 {
 		return 90, nil
 	}
-	
-	return int(avgMs.Float64 / 1000), nil
+
+	// Sort to find median
+	for i := 0; i < len(durations)-1; i++ {
+		for j := i + 1; j < len(durations); j++ {
+			if durations[i] > durations[j] {
+				durations[i], durations[j] = durations[j], durations[i]
+			}
+		}
+	}
+
+	var medianMs int64
+	n := len(durations)
+	if n%2 == 1 {
+		medianMs = durations[n/2]
+	} else {
+		medianMs = (durations[n/2-1] + durations[n/2]) / 2
+	}
+
+	medianSecs := int(medianMs / 1000)
+	if medianSecs < 20 {
+		medianSecs = 20
+	}
+	if medianSecs > 180 {
+		medianSecs = 180
+	}
+	return medianSecs, nil
 }

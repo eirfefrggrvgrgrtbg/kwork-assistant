@@ -7,6 +7,8 @@ import (
 	"kwork-assistant/internal/domain"
 )
 
+const CurrentPromptVersion = "proposal-v5"
+
 // sanitizeDescription is now handled by SanitizeText in sanitizer.go
 
 func BuildPrompt(p domain.Project, eval domain.ProjectEvaluation) string {

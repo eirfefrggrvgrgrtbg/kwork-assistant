@@ -44,6 +44,7 @@ func (g *Generator) Generate(ctx context.Context, p domain.Project, eval domain.
 // generateInternal contains the 3-attempt generation logic without the eligibility guards.
 // Exposed for unit-testing with a mock AI client (no real DB needed).
 func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval domain.ProjectEvaluation, promptVersion string) (domain.ProposalDraft, error) {
+	generationStart := time.Now()
 	basePrompt := BuildPrompt(p, eval)
 
 	// Attempt 1: normal generation
@@ -58,14 +59,14 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 	}
 
 	if valErr == nil {
-		g.saveRun(ctx, p, aiResponse.Response, "", 0)
+		g.saveRun(ctx, p, aiResponse.Response, "", time.Since(generationStart))
 		return draft, nil
 	}
 	
 	if aiResponse != nil {
-		g.saveRun(ctx, p, aiResponse.Response, fmt.Sprintf("attempt1 validation failed: %v", valErr), 0)
+		g.saveRun(ctx, p, aiResponse.Response, fmt.Sprintf("attempt1 validation failed: %v", valErr), time.Since(generationStart))
 	} else {
-		g.saveRun(ctx, p, "ERROR", fmt.Sprintf("attempt1 failed: %v", valErr), 0)
+		g.saveRun(ctx, p, "ERROR", fmt.Sprintf("attempt1 failed: %v", valErr), time.Since(generationStart))
 	}
 
 	// Attempt 2: targeted retry.
@@ -76,7 +77,7 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 		charCount := len([]rune(draft.Proposal))
 		retryPrompt = basePrompt + fmt.Sprintf(
 			"\n\nВНИМАНИЕ! Предыдущий отклик слишком длинный: %d символов (максимум 1000).\n"+
-				"Сократи его до 700–900 символов.\n"+
+				"Сократи его до 400–600 символов.\n"+
 				"Удали второстепенные объяснения.\n"+
 				"Оставь:\n"+
 				"1. понимание задачи;\n"+
@@ -103,14 +104,14 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 	}
 
 	if valErrRetry == nil {
-		g.saveRun(ctx, p, aiResponseRetry.Response, "", 0)
+		g.saveRun(ctx, p, aiResponseRetry.Response, "", time.Since(generationStart))
 		return draftRetry, nil
 	}
 	
 	if aiResponseRetry != nil {
-		g.saveRun(ctx, p, aiResponseRetry.Response, fmt.Sprintf("attempt2 validation failed: %v", valErrRetry), 0)
+		g.saveRun(ctx, p, aiResponseRetry.Response, fmt.Sprintf("attempt2 validation failed: %v", valErrRetry), time.Since(generationStart))
 	} else {
-		g.saveRun(ctx, p, "ERROR", fmt.Sprintf("attempt2 failed: %v", valErrRetry), 0)
+		g.saveRun(ctx, p, "ERROR", fmt.Sprintf("attempt2 failed: %v", valErrRetry), time.Since(generationStart))
 	}
 
 	// Attempt 3: hard compression pass (only for length failures).
@@ -121,10 +122,10 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 			return domain.ProposalDraft{}, fmt.Errorf("compression pass failed: %w", err)
 		}
 		if valErrComp := Validate(compressed); valErrComp != nil {
-			g.saveRun(ctx, p, compressed.Proposal, fmt.Sprintf("attempt3 compression validation failed: %v", valErrComp), 0)
+			g.saveRun(ctx, p, compressed.Proposal, fmt.Sprintf("attempt3 compression validation failed: %v", valErrComp), time.Since(generationStart))
 			return domain.ProposalDraft{}, fmt.Errorf("proposal validation failed after all 3 attempts: %w", valErrComp)
 		}
-		g.saveRun(ctx, p, compressed.Proposal, "", 0)
+		g.saveRun(ctx, p, compressed.Proposal, "", time.Since(generationStart))
 		return compressed, nil
 	}
 
@@ -135,8 +136,8 @@ func (g *Generator) generateInternal(ctx context.Context, p domain.Project, eval
 // It does NOT regenerate from the project brief — it only compresses the existing text.
 func (g *Generator) compressionPass(ctx context.Context, p domain.Project, eval domain.ProjectEvaluation, tooLongText string, promptVersion string) (domain.ProposalDraft, error) {
 	compressionPrompt := fmt.Sprintf(
-		"Сократи следующий готовый отклик до 700–900 символов, не добавляя новой информации и не меняя смысл. "+
-			"Верни результат ТОЛЬКО в JSON с полями proposal, confidence, estimated_days.\n\n"+
+		"Сократи следующий готовый отклик до 400–600 символов, не добавляя новой информации и не меняя смысл. "+
+			"Верни результат ТОЛЬКО в JSON с полями proposal, question, internal_approach, confidence.\n\n"+
 			"Отклик:\n%s",
 		tooLongText,
 	)
